@@ -488,6 +488,8 @@ function initTournament(names, prize, formatType) {
           final: { t1: null, t2: null, w1: 0, w2: 0, winnerId: null },
           standings: []
       };
+      adminGalaTab = 1;
+      publicGalaTab = 0;
   } else if (formatType === 'deathmatch') {
       STATE.tournament = {
           id: Date.now(), type: 'deathmatch', prize: prize || '',
@@ -496,7 +498,8 @@ function initTournament(names, prize, formatType) {
       };
   } else {
       const teams = names.map((n,i) => ({ 
-          id: i, name: n, pts: 0, mp: 0, w: 0, l: 0, d: 0, otw: 0, otl: 0, rw: 0, rl: 0, rating: 0, mapW: 0, mapL: 0 
+          id: i, name: n, pts: 0, mp: 0, w: 0, l: 0, d: 0, otw: 0, otl: 0, rw: 0, rl: 0,
+          rating: 0, mapW: 0, mapL: 0 
       }));
       const pairs = [];
       for (let i = 0; i < 4; i++) { for (let j = i+1; j < 4; j++) pairs.push({ t1: i, t2: j, rounds: [], maps: [], notified: false }); }
@@ -514,207 +517,1526 @@ function checkTournamentInit() {
   }
 }
 
-// УВЕДОМЛЕНИЯ И ЗВУКИ
+// ──────────────────────────────────────────────────────────
+// SOUND EFFECTS & CONFETTI
+// ──────────────────────────────────────────────────────────
 function playSound(type) {
     try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
         const osc = ctx.createOscillator(); const gain = ctx.createGain();
         osc.connect(gain); gain.connect(ctx.destination);
         if (type === 'triumph') {
-            osc.frequency.setValueAtTime(440, ctx.currentTime);
-            osc.frequency.setValueAtTime(659, ctx.currentTime + 0.4);
-            gain.gain.setValueAtTime(0.1, ctx.currentTime);
+            osc.type = 'triangle'; osc.frequency.setValueAtTime(440, ctx.currentTime);
+            osc.frequency.setValueAtTime(554, ctx.currentTime + 0.2); osc.frequency.setValueAtTime(659, ctx.currentTime + 0.4);
+            gain.gain.setValueAtTime(0.1, ctx.currentTime); gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.2);
             osc.start(); osc.stop(ctx.currentTime + 1.2);
+        } else if (type === 'epic') {
+            osc.type = 'square'; osc.frequency.setValueAtTime(392, ctx.currentTime);
+            osc.frequency.setValueAtTime(493, ctx.currentTime + 0.3); osc.frequency.setValueAtTime(587, ctx.currentTime + 0.6);
+            osc.frequency.setValueAtTime(783, ctx.currentTime + 0.9); gain.gain.setValueAtTime(0.15, ctx.currentTime);
+            gain.gain.linearRampToValueAtTime(0.15, ctx.currentTime + 1.2); gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 3);
+            osc.start(); osc.stop(ctx.currentTime + 3); shootConfetti();
         } else if (type === 'kill') {
-            osc.frequency.setValueAtTime(800, ctx.currentTime);
-            gain.gain.setValueAtTime(0.05, ctx.currentTime);
+            osc.type = 'sine'; osc.frequency.setValueAtTime(800, ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(1200, ctx.currentTime + 0.1);
+            gain.gain.setValueAtTime(0.05, ctx.currentTime); gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1);
             osc.start(); osc.stop(ctx.currentTime + 0.1);
+        } else if (type === 'event') {
+            osc.type = 'triangle'; osc.frequency.setValueAtTime(300, ctx.currentTime);
+            osc.frequency.linearRampToValueAtTime(600, ctx.currentTime + 0.2);
+            gain.gain.setValueAtTime(0.1, ctx.currentTime); gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+            osc.start(); osc.stop(ctx.currentTime + 0.3);
         }
     } catch(e) {}
 }
 
-// ГЕЙМПЛЕЙНАЯ ЛОГИКА (ОСАДА)
+function shootConfetti() {
+    const colors = ['#00c8ff', '#00ff9d', '#ffd700', '#ff2244', '#a855f7'];
+    for(let i=0; i<150; i++) {
+        let div = document.createElement('div');
+        div.style.position = 'fixed'; div.style.left = '50%'; div.style.top = '30%';
+        div.style.width = Math.random() > 0.5 ? '8px' : '12px'; div.style.height = Math.random() > 0.5 ? '8px' : '12px';
+        div.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+        div.style.zIndex = '10001'; div.style.pointerEvents = 'none';
+        document.body.appendChild(div);
+        let angle = Math.random() * Math.PI * 2, velocity = 5 + Math.random() * 20;
+        let vx = Math.cos(angle) * velocity, vy = Math.sin(angle) * velocity - 15, rot = Math.random() * 360, frame = 0;
+        function animate() {
+            frame++; div.style.transform = `translate(${vx * frame}px, ${vy * frame + 0.6 * frame * frame}px) rotate(${rot + frame * 10}deg)`;
+            div.style.opacity = 1 - (frame/120);
+            if (frame < 120) requestAnimationFrame(animate); else div.remove();
+        }
+        animate();
+    }
+}
+
+// ──────────────────────────────────────────────────────────
+// MATCH LOGIC HELPERS
+// ──────────────────────────────────────────────────────────
 function getSiegePhase(m) {
-  const reg1 = m.rounds.slice(0, 18).filter(r => r === 1).length; const reg2 = m.rounds.slice(0, 18).filter(r => r === 2).length;
-  const ot1 = m.rounds.slice(18, 24).filter(r => r === 1).length; const ot2 = m.rounds.slice(18, 24).filter(r => r === 2).length;
-  const sd1 = m.rounds.slice(24).filter(r => r === 1).length; const sd2 = m.rounds.slice(24).filter(r => r === 2).length;
-  return { s1: reg1 + ot1 + sd1, s2: reg2 + ot2 + sd2, played: m.rounds.length };
+  const r = m.rounds || [];
+  const reg1 = r.slice(0, 18).filter(x => x === 1).length; const reg2 = r.slice(0, 18).filter(x => x === 2).length;
+  const ot1 = r.slice(18, 24).filter(x => x === 1).length; const ot2 = r.slice(18, 24).filter(x => x === 2).length;
+  const sd1 = r.slice(24).filter(x => x === 1).length; const sd2 = r.slice(24).filter(x => x === 2).length;
+  return { s1: reg1 + ot1 + sd1, s2: reg2 + ot2 + sd2, played: r.length };
 }
 
 function checkSiegeDone(m, isPlayoff) {
   const { s1, s2, played } = getSiegePhase(m);
   if (played <= 18) {
-    if (s1 >= 10 || s2 >= 10) return { done: true, winner: s1 >= 10 ? 1 : 2, ot: false, s1, s2 };
+    if (s1 >= 10) return { done: true, winner: 1, ot: false, draw: false, s1, s2 };
+    if (s2 >= 10) return { done: true, winner: 2, ot: false, draw: false, s1, s2 };
+    if (played === 18 && s1 === 9 && s2 === 9) return null; 
   }
   if (played > 18 && played <= 24) {
-    if (s1 >= 13 || s2 >= 13) return { done: true, winner: s1 >= 13 ? 1 : 2, ot: true, s1, s2 };
-    if (played === 24 && s1 === 12 && s2 === 12 && !isPlayoff) return { done: true, winner: null, draw: true, s1, s2 };
+    if (s1 >= 13 && s1 > s2) return { done: true, winner: 1, ot: true, draw: false, s1, s2 };
+    if (s2 >= 13 && s2 > s1) return { done: true, winner: 2, ot: true, draw: false, s1, s2 };
+    if (played === 24 && s1 === 12 && s2 === 12) { if (!isPlayoff) return { done: true, winner: null, ot: true, draw: true, s1, s2 }; return null; }
   }
   if (played > 24) {
-    if (s1 >= 14 || s2 >= 14) return { done: true, winner: s1 >= 14 ? 1 : 2, ot: true, sd: true, s1, s2 };
-  }
-  return null;
+    if (s1 >= 14) return { done: true, winner: 1, ot: true, sd: true, draw: false, s1, s2 };
+    if (s2 >= 14) return { done: true, winner: 2, ot: true, sd: true, draw: false, s1, s2 };
+  } return null;
 }
 
-// ГЕЙМПЛЕЙНАЯ ЛОГИКА (ВОСХОЖДЕНИЕ)
 function getAscensionPhase(m) {
   if (!m.maps) m.maps = [];
-  let maps1 = 0, maps2 = 0, r1 = 0, r2 = 0;
+  let maps1 = 0, maps2 = 0, rating1 = 0, rating2 = 0;
   m.maps.forEach(map => {
-      let s1 = map.t1Scores.reduce((a,b)=>a+b,0); let s2 = map.t2Scores.reduce((a,b)=>a+b,0);
-      r1 += s1; r2 += s2;
-      if (map.t1Scores.length === 6) { if(s1 > s2) maps1++; else if (s2 > s1) maps2++; }
+      const s1s = map.t1Scores || []; const s2s = map.t2Scores || [];
+      let s1 = s1s.reduce((a,b)=>a+b,0); let s2 = s2s.reduce((a,b)=>a+b,0);
+      rating1 += s1; rating2 += s2;
+      if (s1s.length === 6) { if(s1 > s2) maps1++; else if (s2 > s1) maps2++; }
   });
-  return { maps1, maps2, rating1: r1, rating2: r2, totalTours: m.maps.reduce((acc, map) => acc + map.t1Scores.length, 0) };
+  return { maps1, maps2, rating1, rating2, totalTours: m.maps.reduce((acc, map) => acc + (map.t1Scores ? map.t1Scores.length : 0), 0) };
 }
 
-function checkMatchDone(m, isPlayoff = false, overrideType) {
+function checkAscensionDone(m, isPlayoff) {
+  const ph = getAscensionPhase(m);
+  if (!isPlayoff) {
+      if (ph.totalTours >= 18) {
+         if (ph.rating1 > ph.rating2) return { done: true, winner: 1, draw: false };
+         if (ph.rating2 > ph.rating1) return { done: true, winner: 2, draw: false };
+         return { done: true, winner: null, draw: true };
+      } return null;
+  } else {
+      if (ph.maps1 >= 2) return { done: true, winner: 1, draw: false };
+      if (ph.maps2 >= 2) return { done: true, winner: 2, draw: false };
+      if (m.maps && m.maps.length === 3 && m.maps[2].t1Scores && m.maps[2].t1Scores.length === 6) {
+         if (ph.rating1 > ph.rating2) return { done: true, winner: 1, draw: false };
+         if (ph.rating2 > ph.rating1) return { done: true, winner: 2, draw: false };
+         return { done: true, winner: 1, draw: false };
+      } return null;
+  }
+}
+
+function getMatchPhase(m, overrideType) {
   const tType = overrideType || (STATE.tournament ? STATE.tournament.type : 'siege');
   if (tType === 'ascension') {
-      const ph = getAscensionPhase(m);
-      if (isPlayoff) return (ph.maps1 >= 2 || ph.maps2 >= 2) ? { done: true } : null;
-      return ph.totalTours >= 18 ? { done: true, draw: ph.rating1 === ph.rating2 } : null;
+      const ph = getAscensionPhase(m); return { s1: ph.maps1, s2: ph.maps2, played: ph.totalTours, r1: ph.rating1, r2: ph.rating2 };
   }
+  return getSiegePhase(m);
+}
+function checkMatchDone(m, isPlayoff = false, overrideType) {
+  const tType = overrideType || (STATE.tournament ? STATE.tournament.type : 'siege');
+  if (tType === 'ascension') return checkAscensionDone(m, isPlayoff);
   return checkSiegeDone(m, isPlayoff);
 }
 
-// РЕНДЕРИНГ МАТЧЕЙ
+function getChances() {
+   const t = STATE.tournament;
+   if (!t || t.type !== 'gala') return [];
+   let totalPts = t.teams.reduce((s, tm) => s + tm.galaPts, 0);
+   let stagesLeft = Math.max(0, 4 - t.galaStage); 
+   let base = 5 + (stagesLeft * 5); 
+   let totalWithBase = totalPts + (base * 4);
+   
+   return t.teams.map(tm => {
+       if (t.galaStage >= 5 && t.final.winnerId !== null) {
+           return { id: tm.id, chance: tm.id === t.final.winnerId ? 100 : 0 };
+       }
+       let rank = t.standings.findIndex(x=>x.id === tm.id);
+       if (t.galaStage >= 4 && rank === 3) return { id: tm.id, chance: 0 };
+       let c = Math.round(((tm.galaPts + base) / (totalWithBase || 1)) * 100);
+       return { id: tm.id, chance: c };
+   });
+}
+
+// ──────────────────────────────────────────────────────────
+// RECALC STANDINGS
+// ──────────────────────────────────────────────────────────
+function recalcStandings() {
+  const t = STATE.tournament;
+  if (!t) return;
+
+  if (t.type === 'gala') {
+      t.teams.forEach(tm => { tm.galaPts = 0; });
+      
+      t.s1.forEach(m => {
+          const res = checkSiegeDone(m, false);
+          if (res) {
+              if (res.draw) { t.teams[m.t1].galaPts += 1; t.teams[m.t2].galaPts += 1; }
+              else if (!res.ot) { if (res.winner === 1) t.teams[m.t1].galaPts += 3; else t.teams[m.t2].galaPts += 3; }
+              else { if (res.winner === 1) { t.teams[m.t1].galaPts += 2; t.teams[m.t2].galaPts += 1; } else { t.teams[m.t2].galaPts += 2; t.teams[m.t1].galaPts += 1; } }
+          }
+      });
+      
+      let ascRatings = [0,0,0,0];
+      t.s2.forEach(m => { const ph = getAscensionPhase(m); ascRatings[m.t1] += ph.rating1; ascRatings[m.t2] += ph.rating2; });
+      let ascRanks = [0,1,2,3].sort((a,b) => ascRatings[b] - ascRatings[a]);
+      const ascPts = [5, 4, 2, 1];
+      if (ascRatings.some(r => r > 0)) { ascRanks.forEach((tid, i) => { t.teams[tid].galaPts += ascPts[i]; }); }
+
+      let dmRanks = [0,1,2,3].sort((a,b) => (t.s3.kills[b] - t.s3.kills[a]) || (t.s3.times[b] - t.s3.times[a]));
+      if (t.s3.kills && t.s3.kills.some(k => k > 0)) {
+          dmRanks.forEach((tid, i) => { t.teams[tid].galaPts += ascPts[i]; t.teams[tid].galaPts += Math.floor(t.s3.kills[tid] / 15); });
+      }
+
+      t.standings = [...t.teams].sort((a, b) => b.galaPts - a.galaPts);
+      
+      if (t.galaStage >= 4 && (t.semi.t1 === null || t.semi.t1 === undefined)) {
+          if (t.standings.length >= 3) {
+              t.semi.t1 = t.standings[1].id;
+              t.semi.t2 = t.standings[2].id;
+          }
+      }
+      return;
+  }
+
+  if (t.type === 'deathmatch') {
+      t.standings = [...t.teams].sort((a, b) => b.kills - a.kills);
+      return;
+  }
+
+  if (t.type === 'ascension') {
+      t.teams.forEach(tm => { tm.mp = 0; tm.rating = 0; tm.mapW = 0; tm.mapL = 0; });
+      t.matches.forEach(m => {
+         if (!m.maps) return;
+         const tm1 = t.teams[m.t1]; const tm2 = t.teams[m.t2];
+         tm1.mp++; tm2.mp++;
+         const ph = getMatchPhaseAscension(m);
+         tm1.rating += ph.rating1; tm2.rating += ph.rating2;
+         tm1.mapW += ph.maps1; tm1.mapL += ph.maps2;
+         tm2.mapW += ph.maps2; tm2.mapL += ph.maps1;
+      });
+      t.standings = [...t.teams].sort((a, b) => {
+        if (b.rating !== a.rating) return b.rating - a.rating;
+        const hth = t.matches.find(m => (m.t1 === a.id && m.t2 === b.id) || (m.t1 === b.id && m.t2 === a.id));
+        if (hth) {
+           let rA = 0, rB = 0;
+           (hth.maps||[]).forEach(map => { 
+               rA += (hth.t1 === a.id ? (map.t1Scores||[]) : (map.t2Scores||[])).reduce((acc,val)=>acc+val,0); 
+               rB += (hth.t1 === b.id ? (map.t1Scores||[]) : (map.t2Scores||[])).reduce((acc,val)=>acc+val,0); 
+           });
+           return rB - rA;
+        } return 0;
+      });
+  } else {
+      t.teams.forEach(tm => { tm.pts = 0; tm.mp = 0; tm.w = 0; tm.l = 0; tm.d = 0; tm.otw = 0; tm.otl = 0; tm.rw = 0; tm.rl = 0; });
+      t.matches.forEach(m => {
+        const res = checkSiegeDone(m, false);
+        if (!res) return;
+        const tm1 = t.teams[m.t1]; const tm2 = t.teams[m.t2];
+        tm1.mp++; tm2.mp++;
+        tm1.rw += res.s1; tm1.rl += res.s2; tm2.rw += res.s2; tm2.rl += res.s1;
+        if (res.draw) { tm1.pts += 1; tm2.pts += 1; tm1.d++; tm2.d++; } 
+        else if (!res.ot) { if (res.winner === 1) { tm1.pts += 3; tm1.w++; tm2.l++; } else { tm2.pts += 3; tm2.w++; tm1.l++; } } 
+        else { if (res.winner === 1) { tm1.pts += 2; tm1.otw++; tm2.pts += 1; tm2.otl++; } else { tm2.pts += 2; tm2.otw++; tm1.pts += 1; tm1.otl++; } }
+      });
+      t.standings = [...t.teams].sort((a, b) => {
+        if (b.pts !== a.pts) return b.pts - a.pts; return (b.rw - b.rl) - (a.rw - a.rl);
+      });
+  }
+}
+
+function checkPlayoffs() {
+  const t = STATE.tournament;
+  if (!t || t.type === 'deathmatch' || t.type === 'gala') return;
+  const regDone = t.matches.every(m => checkMatchDone(m, false) !== null);
+  if (regDone && !t.playoffs) {
+    const isAsc = t.type === 'ascension';
+    t.playoffs = [
+      { t1: t.standings[2].id, t2: t.standings[3].id, rounds: [], maps: [], notified: false, name: isAsc ? "Битва за выживание (3 vs 4)" : "Четвертьфинал" },
+      { t1: null, t2: t.standings[1].id, rounds: [], maps: [], notified: false, name: "Полуфинал" },
+      { t1: null, t2: t.standings[0].id, rounds: [], maps: [], notified: false, name: "ГРАНД-ФИНАЛ" }
+    ];
+  }
+  if (t.playoffs) {
+    const res0 = checkMatchDone(t.playoffs[0], true);
+    t.playoffs[1].t1 = (res0 && !res0.draw) ? (res0.winner === 1 ? t.playoffs[0].t1 : t.playoffs[0].t2) : null;
+    if (!res0) { t.playoffs[1].rounds = []; t.playoffs[1].maps = []; }
+    const res1 = checkMatchDone(t.playoffs[1], true);
+    t.playoffs[2].t1 = (res1 && !res1.draw) ? (res1.winner === 1 ? t.playoffs[1].t1 : t.playoffs[1].t2) : null;
+    if (!res1) { t.playoffs[2].rounds = []; t.playoffs[2].maps = []; }
+  }
+}
+
+function triggerNotification(m, isPlayoff, titlePrefix, isFinal = false, tTypeOver = null) {
+  const res = checkMatchDone(m, isPlayoff, tTypeOver);
+  if (res && !m.notified) {
+    m.notified = true;
+    const tm1 = m.t1 !== null ? STATE.tournament.teams[m.t1] : null;
+    const tm2 = m.t2 !== null ? STATE.tournament.teams[m.t2] : null;
+    let winnerName = "Ничья"; let winnerId = null;
+    if (!res.draw && tm1 && tm2) { winnerId = res.winner === 1 ? tm1.id : tm2.id; winnerName = res.winner === 1 ? tm1.name : tm2.name; }
+    
+    let playersStr = "";
+    if (winnerId !== null && isPlayoff) {
+      const pl = STATE.requests.filter(r => r.status === 'accepted' && r.teamId === winnerId).map(r => r.nickname);
+      if(pl.length > 0) playersStr = `Состав: ${pl.join(', ')}`;
+    }
+    localStorage.setItem('bf_notify', JSON.stringify({
+      title: titlePrefix, text: `${tm1?tm1.name:'TBD'} vs ${tm2?tm2.name:'TBD'}<br><span style="color:var(--green);font-size:1.2rem;font-weight:700;">Победитель: ${winnerName}</span>`,
+      players: playersStr, time: Date.now(), isPlayoff: isPlayoff, isFinal: isFinal
+    }));
+  }
+}
+
+// ──────────────────────────────────────────────────────────
+// STANDARD MATCH CONTROLS
+// ──────────────────────────────────────────────────────────
+window.addRound = function(mi, winnerSide, isPlayoff = false) {
+  const t = STATE.tournament;
+  const matchArray = t.type === 'gala' ? (adminGalaTab === 1 ? t.s1 : []) : (isPlayoff ? t.playoffs : t.matches);
+  const m = matchArray[mi];
+  if (!m || m.t1 === null || m.t2 === null) return;
+  if (checkMatchDone(m, isPlayoff, t.type==='gala'?'siege':t.type)) return; 
+  m.rounds = m.rounds || [];
+  m.rounds.push(winnerSide);
+  checkPlayoffs(); recalcStandings();
+  triggerNotification(m, isPlayoff, isPlayoff ? m.name : `Матч ${mi+1} завершён`, isPlayoff && mi === 2, t.type==='gala'?'siege':t.type);
+  save(); renderMatches(); renderAllMatchesPublic();
+};
+
+window.undoRound = function(mi, isPlayoff = false) {
+  const t = STATE.tournament;
+  const matchArray = t.type === 'gala' ? (adminGalaTab === 1 ? t.s1 : []) : (isPlayoff ? t.playoffs : t.matches);
+  const m = matchArray[mi];
+  if (!m || !m.rounds || m.rounds.length === 0) return;
+  m.rounds.pop(); m.notified = false;
+  if (isPlayoff && t.type !== 'gala') {
+    if (mi === 0) { t.playoffs[1].t1 = null; t.playoffs[1].rounds = []; t.playoffs[1].notified = false; t.playoffs[2].t1 = null; t.playoffs[2].rounds = []; t.playoffs[2].notified = false; }
+    else if (mi === 1) { t.playoffs[2].t1 = null; t.playoffs[2].rounds = []; t.playoffs[2].notified = false; }
+  }
+  checkPlayoffs(); recalcStandings(); save(); renderMatches(); renderAllMatchesPublic();
+};
+
+window.addAscensionTour = function(mi, isPlayoff) {
+  const t = STATE.tournament;
+  const prefix = isPlayoff ? 'p' : '';
+  const i1 = document.getElementById(`asc_t1_${prefix}${mi}`); const i2 = document.getElementById(`asc_t2_${prefix}${mi}`);
+  if (!i1 || !i2 || i1.value==='' || i2.value==='') { toast('Введите рейтинг!', true); return; }
+  const val1 = parseInt(i1.value, 10); const val2 = parseInt(i2.value, 10);
+  if (isNaN(val1) || isNaN(val2) || val1 < 0 || val2 < 0) { toast('Введите корректный рейтинг!', true); return; }
+  let matchArray;
+  if (t.type === 'gala') {
+    matchArray = adminGalaTab === 2 ? t.s2 : (adminGalaTab === 4 ? null : []);
+  } else {
+    matchArray = isPlayoff ? t.playoffs : t.matches;
+  }
+  if (!matchArray) return;
+  const m = matchArray[mi];
+  if (!m || m.t1 === null || m.t2 === null) return;
+  if (checkMatchDone(m, isPlayoff, 'ascension')) { toast('Матч уже завершён!', true); return; }
+  
+  m.maps = m.maps || [];
+  if (m.maps.length === 0 || (m.maps[m.maps.length - 1].t1Scores || []).length === 6) { m.maps.push({ t1Scores: [], t2Scores: [] }); }
+  m.maps[m.maps.length - 1].t1Scores = m.maps[m.maps.length - 1].t1Scores || [];
+  m.maps[m.maps.length - 1].t2Scores = m.maps[m.maps.length - 1].t2Scores || [];
+  
+  m.maps[m.maps.length - 1].t1Scores.push(val1); m.maps[m.maps.length - 1].t2Scores.push(val2);
+  i1.value = ''; i2.value = '';
+  checkPlayoffs(); recalcStandings();
+  triggerNotification(m, isPlayoff, isPlayoff ? m.name : `Матч ${mi+1} завершён`, isPlayoff && mi === 2, 'ascension');
+  save(); renderMatches(); renderAllMatchesPublic();
+};
+
+window.undoAscensionTour = function(mi, isPlayoff) {
+  const t = STATE.tournament;
+  let matchArray;
+  if (t.type === 'gala') {
+    matchArray = adminGalaTab === 2 ? t.s2 : [];
+  } else {
+    matchArray = isPlayoff ? t.playoffs : t.matches;
+  }
+  const m = matchArray[mi];
+  if (!m || !m.maps || m.maps.length === 0) return;
+  const currentMap = m.maps[m.maps.length - 1];
+  if (currentMap.t1Scores && currentMap.t1Scores.length > 0) { 
+      currentMap.t1Scores.pop(); currentMap.t2Scores.pop(); 
+      if (currentMap.t1Scores.length === 0) m.maps.pop(); 
+  }
+  m.notified = false;
+  if (isPlayoff && t.type !== 'gala') {
+    if (mi === 0) { t.playoffs[1].t1 = null; t.playoffs[1].maps = []; t.playoffs[1].notified = false; t.playoffs[2].t1 = null; t.playoffs[2].maps = []; t.playoffs[2].notified = false; }
+    else if (mi === 1) { t.playoffs[2].t1 = null; t.playoffs[2].maps = []; t.playoffs[2].notified = false; }
+  }
+  checkPlayoffs(); recalcStandings(); save(); renderMatches(); renderAllMatchesPublic();
+};
+
+window.replayMatch = function(mi, isPlayoff = false) {
+  if(!confirm('Переиграть матч? Счёт будет сброшен.')) return;
+  const t = STATE.tournament;
+  const matchArray = t.type === 'gala' ? (adminGalaTab === 1 ? t.s1 : t.s2) : (isPlayoff ? t.playoffs : t.matches);
+  const m = matchArray[mi];
+  m.rounds = []; m.maps = []; m.notified = false;
+  if (isPlayoff && t.type !== 'gala') {
+    if (mi === 0) { t.playoffs[1].t1 = null; t.playoffs[1].rounds = []; t.playoffs[1].maps = []; t.playoffs[1].notified = false; t.playoffs[2].t1 = null; t.playoffs[2].rounds = []; t.playoffs[2].maps = []; t.playoffs[2].notified = false; }
+    else if (mi === 1) { t.playoffs[2].t1 = null; t.playoffs[2].rounds = []; t.playoffs[2].maps = []; t.playoffs[2].notified = false; }
+  }
+  checkPlayoffs(); recalcStandings(); save(); renderMatches(); renderAllMatchesPublic();
+};
+
+// ──────────────────────────────────────────────────────────
+// DEATHMATCH CONTROLS
+// ──────────────────────────────────────────────────────────
+window.addDMKill = function(id) {
+    let t = STATE.tournament;
+    if (t.type === 'deathmatch') {
+        let tm = t.teams.find(x => x.id === id);
+        if(tm) { tm.kills++; playSound('kill'); localStorage.setItem('bf_sound', JSON.stringify({ type: 'kill', time: Date.now() })); }
+    } else if (t.type === 'gala' && adminGalaTab === 3) {
+        t.s3.kills[id]++; t.s3.times[id] = Date.now();
+        playSound('kill'); localStorage.setItem('bf_sound', JSON.stringify({ type: 'kill', time: Date.now() }));
+    }
+    save(); recalcStandings(); renderMatches(); renderAllMatchesPublic();
+}
+window.remDMKill = function(id) {
+    let t = STATE.tournament;
+    if (t.type === 'deathmatch') {
+        let tm = t.teams.find(x => x.id === id); if(tm && tm.kills > 0) tm.kills--;
+    } else if (t.type === 'gala' && adminGalaTab === 3) {
+        if (t.s3.kills[id] > 0) t.s3.kills[id]--;
+    }
+    save(); recalcStandings(); renderMatches(); renderAllMatchesPublic();
+}
+window.triggerDMEvent = function() {
+    let t = STATE.tournament;
+    let type = document.getElementById('dm-event-type').value;
+    let evLog = t.type === 'gala' ? t.s3.eventsLog : t.eventsLog;
+    if (t.type === 'gala') t.s3.activeEvent = type; else t.activeEvent = type;
+    
+    if (type === 'shield') {
+        let msg = 'ЩИТ активирован для последней команды!';
+        evLog.unshift({ time: new Date().toLocaleTimeString('ru-RU'), text: msg });
+        localStorage.setItem('bf_notify', JSON.stringify({ title: '// СОБЫТИЕ АРЕНЫ', text: `<span style="color:var(--yellow);">${msg}</span>`, time: Date.now(), isPlayoff: false, isFinal: false, sound: 'event' }));
+    } else if (type === 'none') {
+        evLog.unshift({ time: new Date().toLocaleTimeString('ru-RU'), text: 'Событие отключено' });
+    }
+    save(); renderMatches(); renderAllMatchesPublic();
+}
+window.finishDM = function() {
+    if(!confirm('Закончить основное время игры?')) return;
+    let t = STATE.tournament;
+    let maxKills = Math.max(...t.teams.map(x=>x.kills));
+    let tied = t.teams.filter(x=>x.kills === maxKills);
+    if (tied.length > 1) {
+        t.status = 'tiebreaker'; t.tiebreaker = { target: 10, teams: tied.map(x=>({id: x.id, kills: 0})) };
+        localStorage.setItem('bf_notify', JSON.stringify({ title: '// ВНИМАНИЕ!', text: `<span style="color:var(--red);">НИЧЬЯ! Начинается решающая битва до 10 киллов!</span>`, time: Date.now(), isPlayoff: true, isFinal: false, sound: 'event' }));
+    } else {
+        t.status = 'finished'; t.winnerId = tied[0].id;
+    }
+    save(); renderMatches(); renderAllMatchesPublic();
+}
+window.addDMTbKill = function(id) {
+    let t = STATE.tournament;
+    let tbTm = t.tiebreaker.teams.find(x=>x.id === id);
+    if(tbTm) {
+        tbTm.kills++; playSound('kill'); localStorage.setItem('bf_sound', JSON.stringify({ type: 'kill', time: Date.now() }));
+        if (tbTm.kills >= 10) {
+            t.status = 'finished'; t.winnerId = id; let realTm = t.teams.find(x=>x.id === id);
+            localStorage.setItem('bf_notify', JSON.stringify({ title: '// ЧЕМПИОН DEATHMATCH', text: `<span style="color:var(--yellow);">${realTm.name} побеждает в решающей битве!</span>`, time: Date.now(), isPlayoff: true, isFinal: true }));
+        }
+        save(); renderMatches(); renderAllMatchesPublic();
+    }
+}
+
+// ──────────────────────────────────────────────────────────
+// GALA SPECIFIC CONTROLS
+// ──────────────────────────────────────────────────────────
+window.setGalaStage = function(s) {
+    adminGalaTab = s;
+    renderMatches();
+}
+window.advanceGalaStage = function(s) {
+    if(!confirm(`Завершить текущий этап и перейти к Этапу ${s}?`)) return;
+    STATE.tournament.galaStage = s; adminGalaTab = s;
+    recalcStandings(); save(); renderMatches(); renderAllMatchesPublic();
+}
+window.galaSetSemiMode = function() {
+    STATE.tournament.semi.mode = document.getElementById('gala-semi-mode').value;
+    save(); renderMatches(); renderAllMatchesPublic();
+}
+window.galaSemiAction = function(action, id) {
+    let t = STATE.tournament; let s = t.semi;
+    if (s.winnerId !== null && s.winnerId !== undefined) return;
+    if (action === 'addRound') { s.s1 += (id===s.t1?1:0); s.s2 += (id===s.t2?1:0); }
+    if (action === 'undoRound') { if(id===s.t1 && s.s1>0) s.s1--; if(id===s.t2 && s.s2>0) s.s2--; }
+    if (action === 'addKill') { s.s1 += (id===s.t1?1:0); s.s2 += (id===s.t2?1:0); playSound('kill'); localStorage.setItem('bf_sound', JSON.stringify({ type: 'kill', time: Date.now() })); }
+    if (action === 'remKill') { if(id===s.t1 && s.s1>0) s.s1--; if(id===s.t2 && s.s2>0) s.s2--; }
+    if (action === 'addAsc') {
+        let v1 = parseInt(document.getElementById('gsemi_t1').value,10); let v2 = parseInt(document.getElementById('gsemi_t2').value,10);
+        if(isNaN(v1)||isNaN(v2)) return;
+        if(s.ascMaps.length===0 || (s.ascMaps[s.ascMaps.length-1].t1Scores||[]).length===6) s.ascMaps.push({t1Scores:[], t2Scores:[]});
+        s.ascMaps[s.ascMaps.length-1].t1Scores.push(v1); s.ascMaps[s.ascMaps.length-1].t2Scores.push(v2);
+    }
+    if (action === 'undoAsc') {
+        if(s.ascMaps.length>0) {
+            s.ascMaps[s.ascMaps.length-1].t1Scores.pop(); s.ascMaps[s.ascMaps.length-1].t2Scores.pop();
+            if(s.ascMaps[s.ascMaps.length-1].t1Scores.length===0) s.ascMaps.pop();
+        }
+    }
+    if (action === 'win') {
+        s.winnerId = id;
+        const leader = t.standings && t.standings.length > 0 ? t.standings[0].id : null;
+        t.final.t1 = leader;
+        t.final.t2 = id;
+        t.final.w1 = 0; t.final.w2 = 0; t.final.winnerId = null;
+        localStorage.setItem('bf_notify', JSON.stringify({ title: '// ПОЛУФИНАЛ', text: `<span style="color:var(--green);">${t.teams.find(x=>x.id===id)?.name || ''} проходит в Гранд-Финал!</span>`, time: Date.now(), isPlayoff: true, isFinal: false }));
+    }
+    save(); renderMatches(); renderAllMatchesPublic();
+}
+window.galaFinalAction = function(action, id) {
+    let t = STATE.tournament; let f = t.final;
+    if (f.winnerId !== null && f.winnerId !== undefined) return;
+    if (action === 'win') {
+        if(id === f.t1) f.w1++; else f.w2++;
+        if(f.w1 >= 3) f.winnerId = f.t1;
+        if(f.w2 >= 3) f.winnerId = f.t2;
+        if (f.winnerId !== null && f.winnerId !== undefined) {
+            const winTm = t.teams.find(x=>x.id===f.winnerId);
+            localStorage.setItem('bf_notify', JSON.stringify({ title: '// ГРАНД-ФИНАЛ ГАЛА-ТУРНИРА', text: `<span style="color:var(--yellow);">${winTm?.name || ''} СТАНОВИТСЯ АБСОЛЮТНЫМ ЧЕМПИОНОМ!</span>`, time: Date.now(), isPlayoff: true, isFinal: true }));
+        }
+    }
+    if (action === 'undo') { if(id===f.t1 && f.w1>0) f.w1--; if(id===f.t2 && f.w2>0) f.w2--; }
+    save(); renderMatches(); renderAllMatchesPublic();
+}
+
+window.resetTournament = function() {
+  if(!confirm('ОПАСНОСТЬ: Отменить текущий турнир досрочно?')) return;
+  if (STATE.tournament) STATE.history.unshift({ id: Date.now(), date: new Date().toLocaleString('ru-RU'), type: STATE.tournament.type, teams: STATE.tournament.teams, playoffs: STATE.tournament.playoffs, prize: STATE.tournament.prize, aborted: true });
+  STATE.tournament = null; STATE.requests = []; save();
+  checkTournamentInit(); renderMatches(); renderStandings(); renderPublicStandings(); renderAllMatchesPublic(); renderRequests(); renderHistory();
+  toast('Турнир досрочно отменён', true);
+};
+
+window.finishTournament = function() {
+  if(!confirm('Официально завершить турнир и сохранить в Историю?')) return;
+  let t = STATE.tournament;
+  let finalWinnerHtml = '<span style="color:var(--text3)">Не завершён</span>';
+  
+  if (t.type === 'deathmatch' && t.status === 'finished') {
+      const wTm = t.teams.find(x=>x.id===t.winnerId);
+      if (wTm) finalWinnerHtml = `<span style="color:var(--yellow); text-shadow:0 0 10px rgba(255,215,0,0.5);">🏆 ПОБЕДИТЕЛЬ: ${wTm.name}</span>`;
+  } else if (t.type === 'gala' && t.final.winnerId !== null && t.final.winnerId !== undefined) {
+      const wTm = t.teams.find(x=>x.id===t.final.winnerId) || t.teams[t.final.winnerId];
+      if (wTm) finalWinnerHtml = `<span style="color:var(--yellow); text-shadow:0 0 10px rgba(255,215,0,0.5);">🌟 АБСОЛЮТНЫЙ ЧЕМПИОН: ${wTm.name}</span>`;
+  } else if (t.playoffs && t.playoffs[2]) {
+     const finalMatch = t.playoffs[2];
+     const res = checkMatchDone(finalMatch, true, t.type);
+     if (res && !res.draw) {
+        const wTm = t.teams.find(x=>x.id===(res.winner === 1 ? finalMatch.t1 : finalMatch.t2));
+        if(wTm) finalWinnerHtml = `<span style="color:var(--yellow); text-shadow:0 0 10px rgba(255,215,0,0.5);">🏆 ПОБЕДИТЕЛЬ: ${wTm.name}</span>`;
+     }
+  }
+
+  STATE.history.unshift({ id: Date.now(), date: new Date().toLocaleString('ru-RU'), type: t.type, teams: t.teams, playoffs: t.playoffs, prize: t.prize, aborted: false, winnerHtml: finalWinnerHtml });
+  STATE.tournament = null; STATE.requests = []; save();
+  checkTournamentInit(); renderMatches(); renderStandings(); renderPublicStandings(); renderAllMatchesPublic(); renderRequests(); renderHistory();
+  toast('Турнир успешно завершён!', false);
+};
+
+// ──────────────────────────────────────────────────────────
+// HTML BUILDERS
+// ──────────────────────────────────────────────────────────
 function buildMatchCard(m, mi, isPlayoff = false, overrideType) {
   const t = STATE.tournament;
   const tType = overrideType || t.type;
-  const tm1 = m.t1 !== null ? t.teams[m.t1] : { name: 'TBD' };
-  const tm2 = m.t2 !== null ? t.teams[m.t2] : { name: 'TBD' };
-  const res = checkMatchDone(m, isPlayoff, tType);
-  const done = !!res;
-  
-  let s1 = 0, s2 = 0;
+  const tm1 = m.t1 !== null ? t.teams[m.t1] : { name: 'TBD', id: -1 };
+  const tm2 = m.t2 !== null ? t.teams[m.t2] : { name: 'TBD', id: -1 };
+  const c1 = m.t1 !== null ? TEAM_COLOR_VALS[m.t1] : '#666';
+  const c2 = m.t2 !== null ? TEAM_COLOR_VALS[m.t2] : '#666';
+  const res = checkMatchDone(m, isPlayoff, tType); const done = !!res;
+
+  let score1_disp = 0, score2_disp = 0, played = 0, ascPh = null;
   if (tType === 'ascension') {
-    const ph = getAscensionPhase(m);
-    s1 = isPlayoff ? ph.maps1 : ph.rating1;
-    s2 = isPlayoff ? ph.maps2 : ph.rating2;
+      ascPh = getMatchPhaseAscension(m); played = ascPh.totalTours;
+      if (!isPlayoff) { score1_disp = ascPh.rating1; score2_disp = ascPh.rating2; } else { score1_disp = ascPh.maps1; score2_disp = ascPh.maps2; }
   } else {
-    const ph = getSiegePhase(m);
-    s1 = ph.s1; s2 = ph.s2;
+      const ph = getMatchPhase(m, tType); played = ph.played; score1_disp = ph.s1; score2_disp = ph.s2;
   }
 
+  let statusHtml = played > 0 && !done ? `<span class="match-status status-ongoing">В игре</span>` : `<span class="match-status status-pending">Ожидание</span>`;
+  let statusClass = played > 0 && !done ? 'ongoing' : '';
+  if (done) { statusHtml = res.draw ? `<span class="match-status status-draw">Ничья</span>` : `<span class="match-status status-done">${res.ot ? 'OT ' : ''}Завершён</span>`; statusClass = 'done'; }
+
+  let headTitle = isPlayoff ? m.name : `Матч ${mi+1} · ${tm1.name} vs ${tm2.name}`;
   let controls = '';
-  if (STATE.adminLogged && !done && m.t1 !== null) {
-      if (tType === 'siege') {
-          controls = `<div style="padding:10px; display:flex; gap:10px;">
-            <button class="btn btn-full" onclick="addRound(${mi}, 1, ${isPlayoff})">+ ${tm1.name}</button>
-            <button class="btn btn-full" onclick="addRound(${mi}, 2, ${isPlayoff})">+ ${tm2.name}</button>
-          </div>`;
-      } else {
-          controls = `<div style="padding:10px; text-align:center;">
-             <input type="number" id="asc_t1_${isPlayoff?'p':''}${mi}" style="width:60px;"> : <input type="number" id="asc_t2_${isPlayoff?'p':''}${mi}" style="width:60px;">
-             <button onclick="addAscensionTour(${mi}, ${isPlayoff})">OK</button>
-          </div>`;
-      }
+  
+  if (isPlayoff && !done) {
+    if (tType === 'siege' && played >= 24 && score1_disp >= 12 && score2_disp >= 12) controls += `<div style="text-align:center; padding:10px; border-top:1px solid var(--red); font-family:var(--font-mono); font-size:0.7rem; color:var(--red); font-weight:bold; letter-spacing:1px; background:rgba(255,34,68,0.1);">🔥 ВНЕЗАПНАЯ СМЕРТЬ 🔥</div>`;
+    else if (tType === 'ascension' && score1_disp >= 6 && score2_disp >= 6) controls += `<div style="text-align:center; padding:10px; border-top:1px solid var(--red); font-family:var(--font-mono); font-size:0.7rem; color:var(--red); font-weight:bold; letter-spacing:1px; background:rgba(255,34,68,0.1);">🔥 РЕШАЮЩИЙ РАУНД 🔥</div>`;
   }
 
-  return `<div class="match-card ${done?'done':''}">
-    <div class="match-card-head">${isPlayoff ? m.name : 'Матч ' + (mi+1)}</div>
-    <div class="match-teams">
-        <div class="team-side" style="color:${TEAM_COLOR_VALS[m.t1]}">${tm1.name}<div class="team-score-display">${s1}</div></div>
+  if (STATE.adminLogged && !done && m.t1 !== null && m.t2 !== null) {
+      if (tType === 'ascension') {
+          let activeMapIdx = m.maps && m.maps.length > 0 ? m.maps.length - 1 : 0;
+          let nextTour = 1;
+          if (m.maps && m.maps[activeMapIdx] && (m.maps[activeMapIdx].t1Scores||[]).length < 6) { nextTour = (m.maps[activeMapIdx].t1Scores||[]).length + 1; } 
+          else if (m.maps && m.maps[activeMapIdx] && (m.maps[activeMapIdx].t1Scores||[]).length === 6) { activeMapIdx++; nextTour = 1; }
+          const maxMaps = isPlayoff ? 3 : 3;
+          const totalTours = isPlayoff ? 18 : 18;
+          controls += `
+            <div style="padding:12px 14px; border-top:1px solid var(--border); background:rgba(0,0,0,0.2);">
+               <div style="font-family:var(--font-mono); font-size:0.62rem; color:var(--cyan); text-align:center; margin-bottom:8px; text-transform:uppercase; letter-spacing:2px;">
+                 ⚔ Карта ${Math.min(activeMapIdx+1,3)} из ${maxMaps} · Тур ${nextTour} из 6
+                 <span style="color:var(--text3); margin-left:10px;">(всего туров: ${played}/${totalTours})</span>
+               </div>
+               <div style="display:flex; justify-content:center; align-items:center; gap:10px; margin-bottom:6px;">
+                  <div style="text-align:center;">
+                    <div style="font-family:var(--font-mono);font-size:0.55rem;color:${c1};margin-bottom:3px;">${tm1.name}</div>
+                    <input type="number" id="asc_t1_${isPlayoff?'p':''}${mi}" style="width:70px; text-align:center; padding:6px; font-family:var(--font-mono); background:var(--panel2); border:1px solid ${c1}; color:#fff;" placeholder="Рейт" min="0">
+                  </div>
+                  <span style="color:var(--text3); font-weight:bold; font-size:1.2rem; margin-top:14px;">:</span>
+                  <div style="text-align:center;">
+                    <div style="font-family:var(--font-mono);font-size:0.55rem;color:${c2};margin-bottom:3px;">${tm2.name}</div>
+                    <input type="number" id="asc_t2_${isPlayoff?'p':''}${mi}" style="width:70px; text-align:center; padding:6px; font-family:var(--font-mono); background:var(--panel2); border:1px solid ${c2}; color:#fff;" placeholder="Рейт" min="0">
+                  </div>
+                  <button class="btn btn-cyan" style="padding:7px 14px; font-size:0.65rem; margin-top:14px;" onclick="addAscensionTour(${mi}, ${isPlayoff})">+ ТУР</button>
+               </div>
+               ${m.maps && m.maps.length > 0 ? (() => {
+                  let mDetail = '<div style="margin-top:8px;">';
+                  m.maps.forEach((map, mapIdx) => {
+                      const ms1 = (map.t1Scores||[]).reduce((a,b)=>a+b,0);
+                      const ms2 = (map.t2Scores||[]).reduce((a,b)=>a+b,0);
+                      const mapDone = (map.t1Scores||[]).length === 6;
+                      const wCol = mapDone ? (ms1>ms2?c1:ms2>ms1?c2:'var(--text3)') : 'var(--text3)';
+                      mDetail += `<div style="background:rgba(0,0,0,0.3);border-left:2px solid ${wCol};padding:5px 10px;margin-bottom:4px;border-radius:1px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <span style="font-family:var(--font-mono);font-size:0.58rem;color:var(--text3);">Карта ${mapIdx+1}:</span>
+                        ${(map.t1Scores||[]).map((v1,ti) => `<span style="font-family:var(--font-mono);font-size:0.62rem;background:rgba(255,255,255,0.04);padding:2px 5px;border-radius:2px;"><span style="color:${c1};">${v1}</span><span style="color:var(--text3);">:</span><span style="color:${c2};">${map.t2Scores[ti]}</span></span>`).join('')}
+                        ${mapDone?`<span style="margin-left:auto;font-family:var(--font-mono);font-size:0.65rem;font-weight:bold;color:${wCol};">Σ ${ms1}:${ms2}</span>`:''}
+                      </div>`;
+                  });
+                  mDetail += '</div>';
+                  return mDetail;
+               })() : ''}
+            </div>
+            ${played > 0 ? `<div style="padding:0 1rem 1rem; text-align:center;"><button class="btn" onclick="undoAscensionTour(${mi}, ${isPlayoff})" style="font-size:0.6rem; padding:6px 12px; margin-top:5px; border-color:var(--orange);color:var(--orange);">↩ Отменить последний тур</button></div>` : ''}`;
+          controls += `<div style="text-align:center; padding:10px; border-top:1px solid var(--border); font-family:var(--font-mono); font-size:0.6rem; color:var(--text3);">КЛИКАЙТЕ НА СТОРОНУ ЧТОБЫ ДОБАВИТЬ РАУНД</div>
+            ${played > 0 ? `<div style="padding:0 1rem 1rem; text-align:center;"><button class="btn" onclick="undoRound(${mi}, ${isPlayoff})" style="font-size:0.6rem; padding:6px 12px;">Отменить последний раунд</button></div>` : ''}`;
+      }
+  } else if (STATE.adminLogged && done) {
+      let undoBtn = tType === 'ascension' ? `undoAscensionTour(${mi}, ${isPlayoff})` : `undoRound(${mi}, ${isPlayoff})`;
+      controls += `<div style="padding:1rem; text-align:center;">
+        <button class="btn" onclick="${undoBtn}" style="font-size:0.6rem; padding:6px 12px; margin-right:6px;">Отменить последний результат</button>
+        <button class="btn" onclick="replayMatch(${mi}, ${isPlayoff})" style="font-size:0.6rem; padding:6px 12px; border-color:var(--orange); color:var(--orange);">Переиграть</button>
+      </div>`;
+  }
+
+  let side1Click = STATE.adminLogged && !done && m.t1 !== null && tType === 'siege' ? `onclick="addRound(${mi}, 1, ${isPlayoff})"` : '';
+  let side2Click = STATE.adminLogged && !done && m.t2 !== null && tType === 'siege' ? `onclick="addRound(${mi}, 2, ${isPlayoff})"` : '';
+  
+  let scoreSub1 = '', scoreSub2 = '';
+  if (tType === 'ascension') {
+      scoreSub1 = isPlayoff ? `Рейтинг: ${ascPh.rating1}` : `Карт побед: ${ascPh.maps1} | Туров: ${ascPh.totalTours}/18`;
+      scoreSub2 = isPlayoff ? `Рейтинг: ${ascPh.rating2}` : `Карт побед: ${ascPh.maps2} | Туров: ${ascPh.totalTours}/18`;
+  }
+
+  return `<div class="match-card ${statusClass}" id="match-${isPlayoff?'p':''}${mi}">
+      <div class="match-card-head"><span>${headTitle}</span>${statusHtml}</div>
+      <div class="match-teams">
+        <div class="team-side ${side1Click?'interactive':''}" ${side1Click}>
+          <div class="team-tag" style="color:${c1}">${tm1.name}</div>
+          <div class="team-score-display" style="color:${c1}">${score1_disp}</div>
+          ${scoreSub1 ? `<div style="font-family:var(--font-mono); font-size:0.6rem; color:var(--text3); margin-top:4px;">${scoreSub1}</div>` : ''}
+        </div>
         <div class="score-sep">:</div>
-        <div class="team-side right" style="color:${TEAM_COLOR_VALS[m.t2]}">${tm2.name}<div class="team-score-display">${s2}</div></div>
-    </div>
-    ${controls}
-  </div>`;
+        <div class="team-side right ${side2Click?'interactive':''}" ${side2Click}>
+          <div class="team-tag" style="color:${c2}">${tm2.name}</div>
+          <div class="team-score-display" style="color:${c2}">${score2_disp}</div>
+          ${scoreSub2 ? `<div style="font-family:var(--font-mono); font-size:0.6rem; color:var(--text3); margin-top:4px;">${scoreSub2}</div>` : ''}
+        </div>
+      </div>
+      ${controls}
+    </div>`;
 }
 
-// ВСЕ ОСТАЛЬНЫЕ ФУНКЦИИ (ПЕРЕКЛЮЧЕНИЕ ВКЛАДОК, МОДАЛКИ, FIREBASE)
-function renderMatches() {
-    const container = document.getElementById('matches-list');
-    if (!STATE.tournament || !container) return;
-    if (STATE.tournament.type === 'gala') {
-        container.innerHTML = STATE.tournament.s1.map((m, i) => buildMatchCard(m, i, false, 'siege')).join('');
-    } else if (STATE.tournament.type !== 'deathmatch') {
-        container.innerHTML = STATE.tournament.matches.map((m, i) => buildMatchCard(m, i)).join('');
+function renderGalaAdminTabs() {
+    const t = STATE.tournament;
+    if(!t || t.type !== 'gala') return;
+    let html = '<div style="display:flex; gap:5px; margin-bottom:20px; flex-wrap:wrap;">';
+    for(let i=1; i<=5; i++) {
+        let locked = i > t.galaStage;
+        let active = i === adminGalaTab;
+        let color = locked ? 'var(--text3)' : (active ? 'var(--yellow)' : 'var(--cyan)');
+        let bg = active ? 'rgba(255,215,0,0.1)' : 'var(--panel2)';
+        let border = active ? 'var(--yellow)' : 'var(--border)';
+        html += `<button class="btn" style="flex:1; padding:10px; font-size:0.7rem; color:${color}; background:${bg}; border-color:${border}; ${locked?'opacity:0.5;cursor:not-allowed;':''}" onclick="if(!${locked}) { setGalaStage(${i}); }">Этап ${i}</button>`;
     }
+    html += '</div>';
+    document.getElementById('gala-admin-extra').innerHTML = html;
+}
+
+function renderMatches() {
+  const container = document.getElementById('matches-list');
+  const t = STATE.tournament;
+  if (!t) { container.innerHTML = ''; document.getElementById('gala-admin-extra').innerHTML = ''; return; }
+
+  if (t.type === 'gala') {
+      renderGalaAdminTabs();
+      let html = '';
+      if (adminGalaTab === 1) {
+          html += `<div class="section-label">// ЭТАП 1: ОСАДА</div>`;
+          html += t.s1.map((m, mi) => buildMatchCard(m, mi, false, 'siege')).join('');
+          if (t.galaStage === 1) html += `<button class="btn btn-yellow btn-full" style="margin-top:20px; border-color:var(--yellow); color:var(--yellow);" onclick="advanceGalaStage(2)">Завершить Этап 1 и перейти к Восхождению -></button>`;
+      } else if (adminGalaTab === 2) {
+          html += `<div class="section-label">// ЭТАП 2: ВОСХОЖДЕНИЕ</div>
+          <div style="background:var(--bg2);border:1px solid rgba(0,200,255,0.2);padding:10px 14px;margin-bottom:15px;font-family:var(--font-mono);font-size:0.7rem;color:var(--text2);line-height:1.8;">
+            <span style="color:var(--cyan);">Правила:</span> 6 матчей, каждый — 3 карты по 6 туров. Вводи рейтинг каждой команды за тур. Победитель карты — у кого сумма выше. Побеждает тот, кто набрал больший суммарный рейтинг за весь матч.
+          </div>`;
+          html += t.s2.map((m, mi) => buildMatchCard(m, mi, false, 'ascension')).join('');
+          if (t.galaStage === 2) html += `<button class="btn btn-yellow btn-full" style="margin-top:20px; border-color:var(--yellow); color:var(--yellow);" onclick="advanceGalaStage(3)">Завершить Этап 2 и перейти к Deathmatch -></button>`;
+      } else if (adminGalaTab === 3) {
+          html += `<div class="section-label">// ЭТАП 3: DEATHMATCH</div>
+            <div style="display:flex; gap:10px; margin-bottom: 20px;">
+               <select id="dm-event-type" class="form-select" style="flex:1; border-color:var(--purple);">
+                  <option value="none">-- Без события --</option><option value="shield">🛡️ Щит последнему месту</option>
+               </select>
+               <button class="btn" style="border-color:var(--purple); color:var(--purple);" onclick="triggerDMEvent()">Активировать</button>
+            </div>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:20px;">`;
+          t.teams.forEach(tm => {
+              html += `<div class="dm-admin-card" style="background:var(--panel2); border:1px solid ${TEAM_COLOR_VALS[tm.id]}; padding:15px; border-radius:8px; text-align:center;" onclick="addDMKill(${tm.id})" onmouseover="this.style.boxShadow='0 0 15px ${TEAM_COLOR_VALS[tm.id]}40'" onmouseout="this.style.boxShadow='none'">
+                  <div style="font-family:var(--font-head); font-size:1.1rem; color:${TEAM_COLOR_VALS[tm.id]}; margin-bottom:10px;">${tm.name}</div>
+                  <div style="font-size:2.5rem; font-family:var(--font-head); color:#fff; font-weight:bold; margin-bottom:10px;">${t.s3.kills[tm.id]}</div>
+                  <button class="btn" style="padding:6px 15px; font-size:0.8rem; border-color:var(--text3); color:var(--text3); width:100%;" onclick="event.stopPropagation(); remDMKill(${tm.id})">-1 КИЛЛ</button>
+              </div>`;
+          });
+          html += `</div>`;
+          if (t.galaStage === 3) html += `<button class="btn btn-yellow btn-full" style="margin-top:20px; border-color:var(--yellow); color:var(--yellow);" onclick="advanceGalaStage(4)">Завершить Этап 3 (Выбывает 4 место) -></button>`;
+      } else if (adminGalaTab === 4) {
+          if (t.semi.t1 === null || t.semi.t1 === undefined || t.semi.t2 === null || t.semi.t2 === undefined) { html += '<div style="padding:20px;font-family:var(--font-mono);font-size:0.8rem;color:var(--text3);text-align:center;">Завершите Этап 3 — система автоматически определит 2 и 3 место.</div>'; }
+          else {
+              let tm1 = t.teams.find(x=>x.id===t.semi.t1) || t.teams[t.semi.t1];
+              let tm2 = t.teams.find(x=>x.id===t.semi.t2) || t.teams[t.semi.t2];
+              html += `<div class="section-label">// ЭТАП 4: ПОЛУФИНАЛ (2 МЕСТО VS 3 МЕСТО)</div>
+                <div style="margin-bottom:15px; text-align:center; font-family:var(--font-head); color:#fff;">${tm1.name} <span style="color:var(--text3);">vs</span> ${tm2.name}</div>
+                <select id="gala-semi-mode" class="form-select" style="margin-bottom:15px;" onchange="galaSetSemiMode()">
+                   <option value="none" ${!t.semi.mode?'selected':''}>-- Выберите режим для полуфинала --</option>
+                   <option value="siege" ${t.semi.mode==='siege'?'selected':''}>🏯 Осада (до 10 побед)</option>
+                   <option value="ascension" ${t.semi.mode==='ascension'?'selected':''}>⚔️ Восхождение (до 2 побед по картам)</option>
+                   <option value="deathmatch" ${t.semi.mode==='deathmatch'?'selected':''}>💀 Deathmatch (Гонка до 20 киллов)</option>
+                </select>`;
+              
+              if (t.semi.mode === 'siege') {
+                  html += `<div style="display:flex; gap:10px;">
+                    <div style="flex:1; text-align:center; padding:15px; border:1px solid ${TEAM_COLOR_VALS[tm1.id]}; border-radius:4px;"><div style="font-size:2rem; font-family:var(--font-head); margin-bottom:10px;">${t.semi.s1}</div><button class="btn" onclick="galaSemiAction('addRound',${tm1.id})">+ РАУНД</button><button class="btn" style="margin-top:5px; padding:4px; font-size:0.6rem;" onclick="galaSemiAction('undoRound',${tm1.id})">-1</button></div>
+                    <div style="flex:1; text-align:center; padding:15px; border:1px solid ${TEAM_COLOR_VALS[tm2.id]}; border-radius:4px;"><div style="font-size:2rem; font-family:var(--font-head); margin-bottom:10px;">${t.semi.s2}</div><button class="btn" onclick="galaSemiAction('addRound',${tm2.id})">+ РАУНД</button><button class="btn" style="margin-top:5px; padding:4px; font-size:0.6rem;" onclick="galaSemiAction('undoRound',${tm2.id})">-1</button></div>
+                  </div>`;
+              } else if (t.semi.mode === 'deathmatch') {
+                  html += `<div style="display:flex; gap:10px;">
+                    <div style="flex:1; text-align:center; padding:15px; border:1px solid ${TEAM_COLOR_VALS[tm1.id]}; border-radius:4px; cursor:pointer;" onclick="galaSemiAction('addKill',${tm1.id})"><div style="font-size:2rem; font-family:var(--font-head); margin-bottom:10px;">${t.semi.s1} / 20</div><button class="btn" style="margin-top:5px; padding:4px; font-size:0.6rem;" onclick="event.stopPropagation(); galaSemiAction('remKill',${tm1.id})">-1</button></div>
+                    <div style="flex:1; text-align:center; padding:15px; border:1px solid ${TEAM_COLOR_VALS[tm2.id]}; border-radius:4px; cursor:pointer;" onclick="galaSemiAction('addKill',${tm2.id})"><div style="font-size:2rem; font-family:var(--font-head); margin-bottom:10px;">${t.semi.s2} / 20</div><button class="btn" style="margin-top:5px; padding:4px; font-size:0.6rem;" onclick="event.stopPropagation(); galaSemiAction('remKill',${tm2.id})">-1</button></div>
+                  </div>`;
+              } else if (t.semi.mode === 'ascension') {
+                  let maps1=0, maps2=0;
+                  (t.semi.ascMaps||[]).forEach(m => {
+                      let r1=(m.t1Scores||[]).reduce((a,b)=>a+b,0), r2=(m.t2Scores||[]).reduce((a,b)=>a+b,0);
+                      if((m.t1Scores||[]).length===6) { if(r1>r2) maps1++; else if(r2>r1) maps2++; }
+                  });
+                  html += `<div style="text-align:center; margin-bottom:10px; font-family:var(--font-head);">Счет по картам: ${maps1} - ${maps2}</div>
+                    <div style="display:flex; justify-content:center; align-items:center; gap:10px; background:rgba(0,0,0,0.2); padding:15px; border-radius:4px;">
+                      <input type="number" id="gsemi_t1" style="width:70px; text-align:center; padding:6px; background:var(--panel2); border:1px solid ${TEAM_COLOR_VALS[tm1.id]}; color:#fff;" placeholder="Рейт">
+                      <input type="number" id="gsemi_t2" style="width:70px; text-align:center; padding:6px; background:var(--panel2); border:1px solid ${TEAM_COLOR_VALS[tm2.id]}; color:#fff;" placeholder="Рейт">
+                      <button class="btn btn-cyan" onclick="galaSemiAction('addAsc')">ОК</button><button class="btn" onclick="galaSemiAction('undoAsc')">Отмена</button>
+                    </div>`;
+              }
+              
+              if (t.semi.winnerId) {
+                  html += `<div style="text-align:center; margin-top:15px; color:var(--green); font-family:var(--font-head);">Победитель ПФ: ${t.teams[t.semi.winnerId].name}</div>`;
+                  if (t.galaStage === 4) html += `<button class="btn btn-yellow btn-full" style="margin-top:20px; border-color:var(--yellow); color:var(--yellow);" onclick="advanceGalaStage(5)">Перейти к Гранд-Финалу -></button>`;
+              } else if (t.semi.mode !== 'none') {
+                  html += `<div style="display:flex; gap:10px; margin-top:20px;">
+                    <button class="btn" style="flex:1; border-color:var(--green); color:var(--green);" onclick="galaSemiAction('win',${tm1.id})">ОБЪЯВИТЬ ПОБЕДУ ${tm1.name}</button>
+                    <button class="btn" style="flex:1; border-color:var(--green); color:var(--green);" onclick="galaSemiAction('win',${tm2.id})">ОБЪЯВИТЬ ПОБЕДУ ${tm2.name}</button>
+                  </div>`;
+              }
+          }
+      } else if (adminGalaTab === 5) {
+          if (t.final.t1 === null || t.final.t1 === undefined || t.final.t2 === null || t.final.t2 === undefined) {
+              html += `<div style="padding:20px;font-family:var(--font-mono);font-size:0.8rem;color:var(--text3);text-align:center;">Завершите Полуфинал (Этап 4) и объявите победителя — после этого Гранд-Финал станет доступен.</div>`;
+          } else {
+          let tm1 = t.teams.find(x=>x.id===t.final.t1) || t.teams[t.final.t1];
+          let tm2 = t.teams.find(x=>x.id===t.final.t2) || t.teams[t.final.t2];
+          if (!tm1 || !tm2) { html += `<div style="padding:20px;font-family:var(--font-mono);color:var(--red);">Ошибка: не найдены участники финала. Завершите полуфинал через кнопку ОБЪЯВИТЬ ПОБЕДУ.</div>`; }
+          else {
+          html += `<div class="section-label" style="color:var(--yellow);">// ЭТАП 5: ГРАНД-ФИНАЛ ГАЛА-ТУРНИРА (ИЗ 5 МИНИ-ИГР)</div>
+              <div style="margin-bottom:15px; text-align:center; font-family:var(--font-head); color:#fff; font-size:1.2rem;">${tm1.name} <span style="color:var(--text3);">vs</span> ${tm2.name}</div>
+              <div style="display:flex; gap:10px;">
+                 <div style="flex:1; text-align:center; padding:15px; border:1px solid ${TEAM_COLOR_VALS[tm1.id]}; border-radius:4px; cursor:pointer;" onclick="galaFinalAction('win',${tm1.id})"><div style="font-size:2.5rem; font-family:var(--font-head); margin-bottom:10px;">${t.final.w1} / 3</div><div style="font-size:0.6rem; color:var(--text3);">Побед в мини-играх</div><button class="btn" style="margin-top:5px; padding:4px; font-size:0.6rem;" onclick="event.stopPropagation(); galaFinalAction('undo',${tm1.id})">-1</button></div>
+                 <div style="flex:1; text-align:center; padding:15px; border:1px solid ${TEAM_COLOR_VALS[tm2.id]}; border-radius:4px; cursor:pointer;" onclick="galaFinalAction('win',${tm2.id})"><div style="font-size:2.5rem; font-family:var(--font-head); margin-bottom:10px;">${t.final.w2} / 3</div><div style="font-size:0.6rem; color:var(--text3);">Побед в мини-играх</div><button class="btn" style="margin-top:5px; padding:4px; font-size:0.6rem;" onclick="event.stopPropagation(); galaFinalAction('undo',${tm2.id})">-1</button></div>
+              </div>`;
+          if (t.final.winnerId) {
+             html += `<div style="margin-top:2rem; padding:1.5rem; text-align:center; border:1px solid var(--yellow); background:rgba(255,215,0,0.1); border-radius:4px; box-shadow: 0 0 20px rgba(255,215,0,0.1);">
+                <h3 style="color:var(--yellow); font-family:var(--font-head); margin-bottom:15px; text-shadow: 0 0 10px rgba(255,215,0,0.5);">🏆 ГАЛА-ТУРНИР ЗАВЕРШЁН!</h3>
+                <button class="btn" style="border-color:var(--yellow); color:var(--yellow); background:rgba(255,215,0,0.1);" onclick="finishTournament()">🎉 Сохранить в историю и закончить</button>
+              </div>`;
+          }
+          } 
+          } 
+      }
+      container.innerHTML = html;
+      return;
+  }
+
+  document.getElementById('gala-admin-extra').innerHTML = '';
+
+  if (t.type === 'deathmatch') {
+      if (t.status === 'ongoing') {
+          let dmHtml = `<div class="section-label">// Текущее событие</div>
+            <div style="display:flex; gap:10px; margin-bottom: 20px;">
+               <select id="dm-event-type" class="form-select" style="flex:1; border-color:var(--purple);"><option value="none">-- Без события --</option><option value="shield">🛡️ Щит последнему месту</option></select>
+               <button class="btn" style="border-color:var(--purple); color:var(--purple);" onclick="triggerDMEvent()">Активировать</button>
+            </div>
+            <div class="section-label">// Управление киллами</div>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:20px;">`;
+          t.teams.forEach(tm => {
+              dmHtml += `<div class="dm-admin-card" style="background:var(--panel2); border:1px solid ${TEAM_COLOR_VALS[tm.id]}; padding:15px; border-radius:8px; text-align:center;" onclick="addDMKill(${tm.id})" onmouseover="this.style.boxShadow='0 0 15px ${TEAM_COLOR_VALS[tm.id]}40'" onmouseout="this.style.boxShadow='none'">
+                  <div style="font-family:var(--font-head); font-size:1.1rem; color:${TEAM_COLOR_VALS[tm.id]}; margin-bottom:10px;">${tm.name}</div>
+                  <div style="font-size:2.5rem; font-family:var(--font-head); color:#fff; font-weight:bold; margin-bottom:10px;">${tm.kills}</div>
+                  <button class="btn" style="padding:6px 15px; font-size:0.8rem; border-color:var(--text3); color:var(--text3); width:100%;" onclick="event.stopPropagation(); remDMKill(${tm.id})">-1 КИЛЛ</button>
+              </div>`;
+          });
+          dmHtml += `</div><button class="btn btn-cyan btn-full" style="padding:15px;" onclick="finishDM()">🛑 ЗАКОНЧИТЬ ИГРУ</button>`;
+          container.innerHTML = dmHtml;
+      } else if (t.status === 'tiebreaker') {
+          let html = `<div class="section-label" style="color:var(--red);">// РЕШАЮЩАЯ БИТВА ДО 10 КИЛЛОВ</div><div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:20px;">`;
+          t.tiebreaker.teams.forEach(tbTm => {
+              let realTm = t.teams.find(x => x.id === tbTm.id);
+              html += `<div class="dm-admin-card" style="background:var(--panel2); border:1px solid var(--red); padding:15px; border-radius:8px; text-align:center;" onclick="addDMTbKill(${tbTm.id})" onmouseover="this.style.boxShadow='0 0 15px rgba(255,34,68,0.4)'" onmouseout="this.style.boxShadow='none'">
+                  <div style="font-family:var(--font-head); font-size:1.1rem; color:${TEAM_COLOR_VALS[realTm.id]}; margin-bottom:10px;">${realTm.name}</div>
+                  <div style="font-size:2.5rem; font-family:var(--font-head); color:#fff; font-weight:bold; margin-bottom:10px;">${tbTm.kills} / 10</div>
+              </div>`;
+          });
+          html += `</div>`; container.innerHTML = html;
+      } else {
+          container.innerHTML = `<div style="margin-top:2rem; padding:1.5rem; text-align:center; border:1px solid var(--yellow); background:rgba(255,215,0,0.1); border-radius:4px;"><h3 style="color:var(--yellow); font-family:var(--font-head); margin-bottom:15px;">🏆 ИГРА ЗАВЕРШЕНА!</h3><button class="btn" style="border-color:var(--yellow); color:var(--yellow);" onclick="finishTournament()">🎉 Сохранить в историю</button></div>`;
+      }
+      return;
+  }
+
+  let html = `<div class="section-label">// Групповой этап</div>`;
+  html += t.matches.map((m, mi) => buildMatchCard(m, mi, false)).join('');
+
+  if (t.playoffs) {
+    html += `<div class="section-label" style="margin-top:2rem;">// ПЛЕЙ-ОФФ (${t.type === 'ascension' ? 'ВОСХОЖДЕНИЕ' : 'СЕТКА'})</div>`;
+    html += t.playoffs.map((m, mi) => buildMatchCard(m, mi, true)).join('');
+    
+    const finalMatch = t.playoffs[2];
+    if (checkMatchDone(finalMatch, true)) {
+        html += `<div style="margin-top:2rem; padding:1.5rem; text-align:center; border:1px solid var(--yellow); background:rgba(255,215,0,0.1); border-radius:4px; box-shadow: 0 0 20px rgba(255,215,0,0.1);"><h3 style="color:var(--yellow); font-family:var(--font-head); margin-bottom:15px; text-shadow: 0 0 10px rgba(255,215,0,0.5);">🏆 ТУРНИР ЗАВЕРШЁН!</h3><button class="btn" style="border-color:var(--yellow); color:var(--yellow); background:rgba(255,215,0,0.1);" onclick="finishTournament()">🎉 Сохранить в историю и закончить</button></div>`;
+    }
+  }
+  container.innerHTML = html;
+}
+
+function renderStandingsHeaders() {
+   const t = STATE.tournament;
+   const pHead = document.getElementById('big-standings-head');
+   const aHead = document.getElementById('admin-standings-head');
+   if (t && t.type === 'deathmatch') {
+       if(aHead) aHead.innerHTML = `<tr><th>#</th><th>КИЛЛЫ</th><th>—</th></tr>`;
+   } else if (t && t.type === 'ascension') {
+       if(pHead) pHead.innerHTML = `<tr><th>#</th><th style="text-align:left;">Команда</th><th>М</th><th>В. Карт</th><th>П. Карт</th><th>Рейтинг</th></tr>`;
+       if(aHead) aHead.innerHTML = `<tr><th>#</th><th>РЕЙТ.</th><th>ВК</th></tr>`;
+   } else if (t && t.type === 'gala') {
+       if(aHead) aHead.innerHTML = `<tr><th>#</th><th>ОЧКИ</th><th>—</th></tr>`;
+   } else {
+       if(pHead) pHead.innerHTML = `<tr><th>#</th><th style="text-align:left;">Команда</th><th>М</th><th>В</th><th>П</th><th>Н</th><th>OT-В</th><th>OT-П</th><th>РД</th><th>ОЧ</th></tr>`;
+       if(aHead) aHead.innerHTML = `<tr><th>#</th><th>ОЧ</th><th>РД</th></tr>`;
+   }
+}
+
+function renderStandings() {
+  const t = STATE.tournament;
+  const body = document.getElementById('admin-standings-body');
+  if (!t || !body || !t.standings) { if(body) body.innerHTML = ''; return; }
+  renderStandingsHeaders();
+  body.innerHTML = t.standings.map((tm, i) => {
+    if (t.type === 'deathmatch') {
+        return `<tr><td style="text-align:left;"><span class="rank-num rank-${i+1<4?i+1:4}">${i+1}</span><span style="color:${TEAM_COLOR_VALS[tm.id]};font-family:var(--font-head);font-size:0.72rem;">${tm.name}</span></td><td class="pts-val">${tm.kills}</td><td>—</td></tr>`;
+    } else if (t.type === 'ascension') {
+        return `<tr><td style="text-align:left;"><span class="rank-num rank-${i+1<4?i+1:4}">${i+1}</span><span style="color:${TEAM_COLOR_VALS[tm.id]};font-family:var(--font-head);font-size:0.72rem;">${tm.name}</span></td><td class="pts-val">${tm.rating}</td><td class="rd-val-pos">${tm.mapW}</td></tr>`;
+    } else if (t.type === 'gala') {
+        return `<tr><td style="text-align:left;"><span class="rank-num rank-${i+1<4?i+1:4}">${i+1}</span><span style="color:${TEAM_COLOR_VALS[tm.id]};font-family:var(--font-head);font-size:0.72rem;">${tm.name}</span></td><td class="pts-val">${tm.galaPts}</td><td>—</td></tr>`;
+    } else {
+        const rd = tm.rw - tm.rl; const rdStr = rd > 0 ? '+' + rd : '' + rd;
+        return `<tr><td style="text-align:left;"><span class="rank-num rank-${i+1<4?i+1:4}">${i+1}</span><span style="color:${TEAM_COLOR_VALS[tm.id]};font-family:var(--font-head);font-size:0.72rem;">${tm.name}</span></td><td class="pts-val">${tm.pts}</td><td class="${rd>0?'rd-val-pos':rd<0?'rd-val-neg':'rd-val-neu'}">${rdStr}</td></tr>`;
+    }
+  }).join('');
+}
+
+function renderPublicStandings() {
+  const t = STATE.tournament;
+  const teamDisplay = document.getElementById('standing-teams-display');
+  const bigBody = document.getElementById('big-standings-body');
+  const prizeDisp = document.getElementById('public-prize-display');
+  const prizeVal = document.getElementById('public-prize-val');
+  const modeDisplay = document.getElementById('current-mode-display');
+  const bigStandingsBlock = document.getElementById('big-standings-block');
+  const dmContainer = document.getElementById('dm-public-container');
+  const galaContainer = document.getElementById('gala-public-container');
+
+  if (!t || !t.standings) {
+    if(teamDisplay) teamDisplay.innerHTML = '';
+    if(bigStandingsBlock) bigStandingsBlock.style.display = 'none';
+    if(dmContainer) dmContainer.style.display = 'none';
+    if(galaContainer) galaContainer.style.display = 'none';
+    if(prizeDisp) prizeDisp.style.display = 'none';
+    if(modeDisplay) modeDisplay.textContent = '';
+    return;
+  }
+  
+  if(modeDisplay) {
+      if(t.type === 'gala') modeDisplay.textContent = '— ГАЛА-ТУРНИР';
+      else modeDisplay.textContent = t.type === 'ascension' ? '— ВОСХОЖДЕНИЕ' : (t.type === 'deathmatch' ? '— DEATHMATCH' : '— ОСАДА');
+  }
+  if (prizeDisp && prizeVal) { if (t.prize) { prizeDisp.style.display = 'block'; prizeVal.textContent = t.prize; } else { prizeDisp.style.display = 'none'; } }
+
+  if (teamDisplay) {
+    teamDisplay.innerHTML = t.teams.map((tm) => {
+      const players = STATE.requests.filter(r => r.status === 'accepted' && r.teamId === tm.id);
+      const playersStr = players.length > 0 ? players.map(p=>escHtml(p.nickname)).join(', ') : 'Нет игроков';
+      return `<div class="team-color-card"><div class="team-avatar ${TEAM_BGS[tm.id]}" style="color:${TEAM_COLOR_VALS[tm.id]}">${tm.name.slice(0,2).toUpperCase()}</div><div class="team-card-name" style="color:${TEAM_COLOR_VALS[tm.id]}">${tm.name}</div><div class="team-players">${playersStr}</div></div>`;
+    }).join('');
+  }
+
+  if (t.type === 'deathmatch') {
+      if(bigStandingsBlock) bigStandingsBlock.style.display = 'none';
+      if(galaContainer) galaContainer.style.display = 'none';
+      if(dmContainer) { dmContainer.style.display = 'block'; renderDeathmatchPublic(dmContainer, t.teams, t.activeEvent, t.eventsLog, t.status, t.tiebreaker, t.winnerId); }
+  } else if (t.type === 'gala') {
+      if(bigStandingsBlock) bigStandingsBlock.style.display = 'none';
+      if(dmContainer) dmContainer.style.display = 'none';
+      if(galaContainer) { galaContainer.style.display = 'block'; renderGalaPublic(galaContainer); }
+  } else {
+      if(dmContainer) dmContainer.style.display = 'none';
+      if(galaContainer) galaContainer.style.display = 'none';
+      if(bigStandingsBlock) {
+          bigStandingsBlock.style.display = 'block'; renderStandingsHeaders();
+          bigBody.innerHTML = t.standings.map((tm, i) => {
+            if (t.type === 'ascension') {
+                return `<tr><td><span class="bs-rank rank-${i+1<4?i+1:4}">${i+1}</span><span class="bs-team-name" style="color:${TEAM_COLOR_VALS[tm.id]}">${tm.name}</span></td><td>${tm.mp}</td><td>${tm.mapW}</td><td>${tm.mapL}</td><td class="bs-pts">${tm.rating}</td></tr>`;
+            } else {
+                const rd = tm.rw - tm.rl; const rdStr = rd > 0 ? '+' + rd : '' + rd;
+                return `<tr><td><span class="bs-rank rank-${i+1<4?i+1:4}">${i+1}</span><span class="bs-team-name" style="color:${TEAM_COLOR_VALS[tm.id]}">${tm.name}</span></td><td>${tm.mp}</td><td>${tm.w}</td><td>${tm.l}</td><td>${tm.d}</td><td>${tm.otw}</td><td>${tm.otl}</td><td class="${rd>0?'rd-val-pos':rd<0?'rd-val-neg':'rd-val-neu'}">${rdStr}</td><td class="bs-pts">${tm.pts}</td></tr>`;
+            }
+          }).join('');
+      }
+  }
+}
+
+function renderDeathmatchPublic(container, teams, activeEvent, eventsLog, status, tiebreaker, winnerId, isGalaStage3 = false) {
+    if (!document.getElementById('dm-board-wrapper')) {
+        let skel = `<div class="section-label">// РЕЙТИНГ КИЛЛОВ</div><div id="dm-board-wrapper" style="position:relative; height: 320px; margin-bottom:30px;">`;
+        [0,1,2,3].forEach(id => {
+            skel += `<div id="dm-row-${id}" class="dm-row"><div class="rank" id="dm-rank-${id}"></div><div class="team" id="dm-name-${id}"></div><div class="score" id="dm-score-${id}">0</div><div class="dm-shield" id="dm-shield-${id}">🛡️</div></div>`;
+        });
+        skel += `</div><div id="dm-events-container"></div><div id="dm-tb-container"></div>`;
+        container.innerHTML = skel;
+    }
+
+    let sorted = [...teams];
+    if (isGalaStage3) {
+        sorted.sort((a,b) => (STATE.tournament.s3.kills[b.id] - STATE.tournament.s3.kills[a.id]) || (STATE.tournament.s3.times[b.id] - STATE.tournament.s3.times[a.id]));
+    } else {
+        sorted.sort((a,b) => b.kills - a.kills);
+    }
+
+    teams.forEach(tm => {
+        let r = document.getElementById(`dm-row-${tm.id}`);
+        if(r) {
+            let rank = sorted.findIndex(x => x.id === tm.id);
+            r.style.transform = `translateY(${rank * 75}px)`;
+            document.getElementById(`dm-rank-${tm.id}`).innerText = rank + 1;
+            document.getElementById(`dm-name-${tm.id}`).innerText = tm.name;
+            document.getElementById(`dm-name-${tm.id}`).style.color = TEAM_COLOR_VALS[tm.id];
+            document.getElementById(`dm-score-${tm.id}`).innerText = isGalaStage3 ? STATE.tournament.s3.kills[tm.id] : tm.kills;
+            document.getElementById(`dm-shield-${tm.id}`).style.display = (activeEvent === 'shield' && rank === 3) ? 'inline-flex' : 'none';
+        }
+    });
+
+    let eventsCont = document.getElementById('dm-events-container');
+    if (eventsCont && eventsLog && eventsLog.length > 0) {
+        let evHtml = `<div class="section-label">// ИСТОРИЯ СОБЫТИЙ</div>`;
+        eventsLog.slice(0, 3).forEach(ev => { evHtml += `<div class="dm-event-box"><b>[${ev.time}]</b> ${ev.text}</div>`; });
+        eventsCont.innerHTML = evHtml;
+    }
+
+    let tbCont = document.getElementById('dm-tb-container');
+    if (tbCont && !isGalaStage3) {
+        if (status === 'tiebreaker') {
+            let tbHtml = `<div class="dm-tiebreaker-zone"><h3 style="color:var(--red); font-family:var(--font-head); letter-spacing:2px; margin-bottom:20px;">⚔️ РЕШАЮЩАЯ БИТВА ДО 10 КИЛЛОВ ⚔️</h3><div style="display:flex; justify-content:center; gap:20px;">`;
+            tiebreaker.teams.forEach(tbTm => {
+                let realTm = teams.find(x => x.id === tbTm.id);
+                tbHtml += `<div style="background:rgba(0,0,0,0.5); padding:15px 30px; border-radius:8px; border:1px solid ${TEAM_COLOR_VALS[realTm.id]};"><div style="color:${TEAM_COLOR_VALS[realTm.id]}; font-family:var(--font-head); font-size:1.2rem; font-weight:bold; margin-bottom:10px;">${realTm.name}</div><div style="color:#fff; font-size:2.5rem; font-family:var(--font-head); font-weight:900;">${tbTm.kills}</div></div>`;
+            });
+            tbCont.innerHTML = tbHtml + `</div></div>`;
+        } else if (status === 'finished') {
+            let wTm = teams.find(x => x.id === winnerId);
+            tbCont.innerHTML = `<div style="text-align:center; padding:30px; border:1px solid var(--yellow); background:rgba(255,215,0,0.1); border-radius:8px; margin-top:30px; box-shadow: 0 0 30px rgba(255,215,0,0.2);"><h2 style="color:var(--yellow); font-family:var(--font-head); text-shadow:0 0 15px rgba(255,215,0,0.5);">🏆 ПОБЕДИТЕЛЬ: ${wTm.name} 🏆</h2></div>`;
+        } else { tbCont.innerHTML = ''; }
+    }
+}
+
+function renderGalaPublic(container) {
+    const t = STATE.tournament;
+    
+    let html = '<div style="display:flex; gap:5px; margin-bottom:30px; flex-wrap:wrap; justify-content:center;">';
+    let tabs = ['ОБЩИЙ РЕЙТИНГ', 'ЭТАП 1', 'ЭТАП 2', 'ЭТАП 3', 'ПОЛУФИНАЛ', 'ФИНАЛ'];
+    tabs.forEach((name, i) => {
+        let active = i === publicGalaTab;
+        let color = active ? 'var(--yellow)' : 'var(--text2)';
+        let bg = active ? 'rgba(255,215,0,0.1)' : 'var(--panel2)';
+        let border = active ? 'var(--yellow)' : 'var(--border)';
+        html += `<button class="btn" style="padding:8px 15px; font-size:0.7rem; color:${color}; background:${bg}; border-color:${border};" onclick="publicGalaTab = ${i}; renderPublicStandings();">${name}</button>`;
+    });
+    html += '</div>';
+
+    if (publicGalaTab === 0) {
+        let chances = getChances();
+        html += `<div class="section-label" style="color:var(--yellow);">// ОБЩИЙ РЕЙТИНГ (ПОБЕДНЫЕ ОЧКИ)</div>
+        <div id="gala-board-wrapper" style="position:relative; height: 320px; margin-bottom:40px;">`;
+        t.teams.forEach(tm => {
+            let rank = t.standings.findIndex(x=>x.id === tm.id);
+            let cInfo = chances.find(x=>x.id === tm.id);
+            let elimClass = (t.galaStage >= 4 && rank === 3) ? 'opacity:0.3; filter:grayscale(1);' : '';
+            html += `<div class="dm-row" style="transform:translateY(${rank*75}px); ${elimClass}">
+               <div class="rank">${rank+1}</div>
+               <div class="team" style="color:${TEAM_COLOR_VALS[tm.id]}">${tm.name} 
+                  <span style="display:inline-block; font-size:0.6rem; color:var(--text3); margin-left:15px; font-family:var(--font-mono); font-weight:normal;">Шанс на победу: <span style="color:var(--cyan);">${cInfo.chance}%</span></span>
+                  ${(t.galaStage >= 4 && rank === 3)?'<span style="color:var(--red); font-size:0.7rem; margin-left:10px;">ВЫБЫЛ</span>':''}
+               </div>
+               <div class="score">${tm.galaPts}</div>
+            </div>`;
+        });
+        html += `</div>`;
+    } else if (publicGalaTab === 1) {
+        html += `<div class="section-label">// ЭТАП 1: ОСАДА</div>`;
+        html += t.s1.map((m, mi) => buildMatchCard(m, mi, false, 'siege')).join('');
+    } else if (publicGalaTab === 2) {
+        html += `<div class="section-label" style="color:var(--cyan);">// ЭТАП 2: ВОСХОЖДЕНИЕ — Рейтинговая таблица</div>`;
+
+        // Build ascension standings for stage 2
+        let ascS2 = t.teams.map(tm => ({ id: tm.id, name: tm.name, rating: 0, maps1: 0, maps2: 0, tours: 0 }));
+        t.s2.forEach(m => {
+            const ph = getAscensionPhase(m);
+            ascS2[m.t1].rating += ph.rating1; ascS2[m.t1].maps1 += ph.maps1; ascS2[m.t1].maps2 += ph.maps2; ascS2[m.t1].tours += ph.totalTours;
+            ascS2[m.t2].rating += ph.rating2; ascS2[m.t2].maps1 += ph.maps2; ascS2[m.t2].maps2 += ph.maps1; ascS2[m.t2].tours += ph.totalTours;
+        });
+        ascS2.sort((a,b) => b.rating - a.rating || b.maps1 - a.maps1);
+
+        html += `<div style="background:var(--panel);border:1px solid var(--border);overflow:hidden;margin-bottom:1.5rem;">
+          <div style="height:2px;background:linear-gradient(90deg,transparent,var(--cyan),transparent);"></div>
+          <table style="width:100%;border-collapse:collapse;">
+            <thead><tr>
+              <th style="padding:8px 14px;text-align:left;font-family:var(--font-mono);font-size:0.6rem;letter-spacing:2px;color:var(--text3);background:var(--bg2);border-bottom:1px solid var(--border);">#</th>
+              <th style="padding:8px 14px;text-align:left;font-family:var(--font-mono);font-size:0.6rem;letter-spacing:2px;color:var(--text3);background:var(--bg2);border-bottom:1px solid var(--border);">Команда</th>
+              <th style="padding:8px 14px;text-align:center;font-family:var(--font-mono);font-size:0.6rem;letter-spacing:2px;color:var(--text3);background:var(--bg2);border-bottom:1px solid var(--border);">Карты В</th>
+              <th style="padding:8px 14px;text-align:center;font-family:var(--font-mono);font-size:0.6rem;letter-spacing:2px;color:var(--text3);background:var(--bg2);border-bottom:1px solid var(--border);">Карты П</th>
+              <th style="padding:8px 14px;text-align:center;font-family:var(--font-mono);font-size:0.6rem;letter-spacing:2px;color:var(--text3);background:var(--bg2);border-bottom:1px solid var(--border);">Туры</th>
+              <th style="padding:8px 14px;text-align:center;font-family:var(--font-mono);font-size:0.6rem;letter-spacing:2px;color:var(--text3);background:var(--bg2);border-bottom:1px solid var(--border);">Рейтинг</th>
+            </tr></thead>
+            <tbody>
+              ${ascS2.map((tm, i) => {
+                const ranks = ['rank-1','rank-2','rank-3','rank-4'];
+                return `<tr style="border-bottom:1px solid rgba(0,200,255,0.05);">
+                  <td style="padding:12px 14px;"><span class="rank-num ${ranks[Math.min(i,3)]}">${i+1}</span></td>
+                  <td style="padding:12px 14px;font-family:var(--font-head);font-size:0.8rem;font-weight:700;color:${TEAM_COLOR_VALS[tm.id]}">${escHtml(tm.name)}</td>
+                  <td style="padding:12px 14px;text-align:center;color:var(--green);font-family:var(--font-mono);">${tm.maps1}</td>
+                  <td style="padding:12px 14px;text-align:center;color:var(--red);font-family:var(--font-mono);">${tm.maps2}</td>
+                  <td style="padding:12px 14px;text-align:center;color:var(--text2);font-family:var(--font-mono);">${tm.tours}</td>
+                  <td style="padding:12px 14px;text-align:center;font-family:var(--font-head);font-size:0.95rem;font-weight:700;color:var(--cyan);">${tm.rating}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>`;
+
+        html += `<div class="section-label">// Матчи — Этап 2 (Восхождение)</div>`;
+        t.s2.forEach((m, mi) => {
+            const tm1 = t.teams[m.t1]; const tm2 = t.teams[m.t2];
+            const ph = getAscensionPhase(m);
+            const c1 = TEAM_COLOR_VALS[m.t1]; const c2 = TEAM_COLOR_VALS[m.t2];
+            const res = checkAscensionDone(m, false);
+            const done = !!res;
+            let statusHtml = ph.totalTours > 0 && !done
+                ? `<span class="match-status status-ongoing">В игре</span>`
+                : (done ? `<span class="match-status status-done">Завершён</span>` : `<span class="match-status status-pending">Ожидание</span>`);
+
+            let mapsDetail = '';
+            if (m.maps && m.maps.length > 0) {
+                mapsDetail = m.maps.map((map, mapIdx) => {
+                    const ms1 = (map.t1Scores||[]).reduce((a,b)=>a+b,0);
+                    const ms2 = (map.t2Scores||[]).reduce((a,b)=>a+b,0);
+                    const mapDone = (map.t1Scores||[]).length === 6;
+                    const wCol = mapDone ? (ms1 > ms2 ? c1 : (ms2 > ms1 ? c2 : '#fff')) : 'var(--text3)';
+                    let toursHtml = '';
+                    for (let ti = 0; ti < 6; ti++) {
+                        const v1 = map.t1Scores && map.t1Scores[ti] !== undefined ? map.t1Scores[ti] : '—';
+                        const v2 = map.t2Scores && map.t2Scores[ti] !== undefined ? map.t2Scores[ti] : '—';
+                        const hiCol1 = map.t1Scores && map.t1Scores[ti] !== undefined && map.t1Scores[ti] > (map.t2Scores[ti]||0) ? c1 : 'var(--text2)';
+                        const hiCol2 = map.t2Scores && map.t2Scores[ti] !== undefined && map.t2Scores[ti] > (map.t1Scores[ti]||0) ? c2 : 'var(--text2)';
+                        toursHtml += `<div style="text-align:center;background:rgba(255,255,255,0.04);padding:5px 3px;border-radius:2px;min-width:32px;">
+                          <div style="font-size:0.65rem;font-weight:bold;font-family:var(--font-mono);color:${hiCol1};">${v1}</div>
+                          <div style="font-size:0.5rem;color:var(--text3);margin:2px 0">Тур ${ti+1}</div>
+                          <div style="font-size:0.65rem;font-weight:bold;font-family:var(--font-mono);color:${hiCol2};">${v2}</div>
+                        </div>`;
+                    }
+                    return `<div style="background:rgba(0,0,0,0.25);border-left:3px solid ${wCol};padding:8px 12px;margin-bottom:6px;border-radius:2px;">
+                      <div style="font-family:var(--font-mono);font-size:0.62rem;color:var(--text3);margin-bottom:6px;display:flex;justify-content:space-between;">
+                        <span>КАРТА ${mapIdx+1}</span>
+                        ${mapDone ? `<span style="color:${wCol};font-weight:bold;">${ms1} : ${ms2}${ms1>ms2?' — '+tm1.name+' ✓':ms2>ms1?' — '+tm2.name+' ✓':' — Ничья'}</span>` : `<span style="color:var(--text3);">В процессе (${(map.t1Scores||[]).length}/6 туров)</span>`}
+                      </div>
+                      <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:3px;">${toursHtml}</div>
+                      <div style="display:flex;justify-content:space-between;margin-top:6px;font-family:var(--font-mono);font-size:0.65rem;">
+                        <span style="color:${c1};">Σ ${ms1}</span><span style="color:var(--text3);">Рейтинг</span><span style="color:${c2};">Σ ${ms2}</span>
+                      </div>
+                    </div>`;
+                }).join('');
+            }
+
+            html += `<div class="match-wrap" style="margin-bottom:10px;">
+              <div class="match-card-head" style="padding:9px 14px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;font-family:var(--font-mono);font-size:0.65rem;letter-spacing:2px;color:var(--text3);">
+                <span>Матч ${mi+1} · <span style="color:${c1}">${escHtml(tm1.name)}</span> vs <span style="color:${c2}">${escHtml(tm2.name)}</span></span>
+                ${statusHtml}
+              </div>
+              <div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:12px 16px;gap:10px;">
+                <div>
+                  <div style="font-family:var(--font-head);font-size:0.75rem;font-weight:700;color:${c1};margin-bottom:2px;">${escHtml(tm1.name)}</div>
+                  <div style="font-family:var(--font-head);font-size:2rem;font-weight:900;color:${c1};">${ph.rating1}</div>
+                  <div style="font-family:var(--font-mono);font-size:0.6rem;color:var(--text3);">Карт: ${ph.maps1}</div>
+                </div>
+                <div style="text-align:center;font-family:var(--font-head);color:var(--text3);">
+                  <div style="font-size:0.8rem;">:</div>
+                  <div style="font-size:0.6rem;margin-top:4px;color:var(--text3);">Рейтинг</div>
+                </div>
+                <div style="text-align:right;">
+                  <div style="font-family:var(--font-head);font-size:0.75rem;font-weight:700;color:${c2};margin-bottom:2px;">${escHtml(tm2.name)}</div>
+                  <div style="font-family:var(--font-head);font-size:2rem;font-weight:900;color:${c2};">${ph.rating2}</div>
+                  <div style="font-family:var(--font-mono);font-size:0.6rem;color:var(--text3);">Карт: ${ph.maps2}</div>
+                </div>
+              </div>
+              ${mapsDetail ? `<div style="padding:0 14px 12px;">${mapsDetail}</div>` : ''}
+            </div>`;
+        });
+    } else if (publicGalaTab === 3) {
+        html += `<div class="section-label">// ЭТАП 3: DEATHMATCH</div><div id="gala-dm-subcontainer"></div>`;
+    } else if (publicGalaTab === 4) {
+        if (t.semi.t1 === null || t.semi.t1 === undefined || t.semi.t2 === null || t.semi.t2 === undefined) {
+            html += '<div style="padding:20px;font-family:var(--font-mono);font-size:0.8rem;color:var(--text3);text-align:center;">Ожидание завершения предыдущих этапов...</div>';
+        } else {
+            let tm1 = t.teams.find(x=>x.id===t.semi.t1) || t.teams[t.semi.t1];
+            let tm2 = t.teams.find(x=>x.id===t.semi.t2) || t.teams[t.semi.t2];
+            html += `<div class="section-label" style="color:var(--cyan);">// ЭТАП 4: ПОЛУФИНАЛ (ЗА ВЫХОД В ФИНАЛ)</div>
+            <div style="background:var(--panel2); padding:20px; border:1px solid var(--border2); border-radius:8px; text-align:center;">
+               <div style="font-family:var(--font-head); font-size:1.5rem; margin-bottom:20px;">
+                  <span style="color:${TEAM_COLOR_VALS[tm1.id]}">${tm1.name}</span> 
+                  <span style="color:var(--text3); font-size:1rem; margin:0 15px;">vs</span> 
+                  <span style="color:${TEAM_COLOR_VALS[tm2.id]}">${tm2.name}</span>
+               </div>`;
+            if (t.semi.mode === 'siege') {
+                html += `<div style="color:var(--text2); margin-bottom:15px; font-family:var(--font-mono); text-transform:uppercase;">Режим: Осада (до 10 побед)</div>
+                <div style="display:flex; justify-content:center; gap:20px;">
+                   <div style="font-size:3rem; font-family:var(--font-head); color:${TEAM_COLOR_VALS[tm1.id]}">${t.semi.s1}</div>
+                   <div style="font-size:3rem; font-family:var(--font-head); color:var(--text3)">:</div>
+                   <div style="font-size:3rem; font-family:var(--font-head); color:${TEAM_COLOR_VALS[tm2.id]}">${t.semi.s2}</div>
+                </div>`;
+            } else if (t.semi.mode === 'deathmatch') {
+                html += `<div style="color:var(--text2); margin-bottom:15px; font-family:var(--font-mono); text-transform:uppercase;">Режим: Deathmatch (до 20 киллов)</div>
+                <div style="display:flex; justify-content:center; gap:20px;">
+                   <div style="font-size:3rem; font-family:var(--font-head); color:${TEAM_COLOR_VALS[tm1.id]}">${t.semi.s1}</div>
+                   <div style="font-size:3rem; font-family:var(--font-head); color:var(--text3)">:</div>
+                   <div style="font-size:3rem; font-family:var(--font-head); color:${TEAM_COLOR_VALS[tm2.id]}">${t.semi.s2}</div>
+                </div>`;
+            } else if (t.semi.mode === 'ascension') {
+                let maps1=0, maps2=0;
+                (t.semi.ascMaps||[]).forEach(m => { let r1=(m.t1Scores||[]).reduce((a,b)=>a+b,0), r2=(m.t2Scores||[]).reduce((a,b)=>a+b,0); if((m.t1Scores||[]).length===6){if(r1>r2)maps1++;else if(r2>r1)maps2++;} });
+                html += `<div style="color:var(--text2); margin-bottom:15px; font-family:var(--font-mono); text-transform:uppercase;">Режим: Восхождение (Счет по картам)</div>
+                <div style="display:flex; justify-content:center; gap:20px;">
+                   <div style="font-size:3rem; font-family:var(--font-head); color:${TEAM_COLOR_VALS[tm1.id]}">${maps1}</div>
+                   <div style="font-size:3rem; font-family:var(--font-head); color:var(--text3)">:</div>
+                   <div style="font-size:3rem; font-family:var(--font-head); color:${TEAM_COLOR_VALS[tm2.id]}">${maps2}</div>
+                </div>
+                ${generateDetailsHtml({maps: t.semi.ascMaps}, TEAM_COLOR_VALS[tm1.id], TEAM_COLOR_VALS[tm2.id], tm1, tm2)}`;
+            } else {
+                html += `<div style="color:var(--text3);">Ожидание выбора режима администратором...</div>`;
+            }
+            if (t.semi.winnerId !== null && t.semi.winnerId !== undefined) {
+                const semiWinTm = t.teams.find(x=>x.id===t.semi.winnerId) || t.teams[t.semi.winnerId];
+                html += `<div style="margin-top:20px; color:var(--green); font-family:var(--font-head); font-size:1.2rem;">✓ ПОБЕДИТЕЛЬ ИДЕТ В ФИНАЛ: ${semiWinTm?.name || ''}</div>`;
+            }
+            html += `</div>`;
+        }
+    } else if (publicGalaTab === 5) {
+        if (t.final.t1 === null || t.final.t1 === undefined || t.final.t2 === null || t.final.t2 === undefined) {
+            html += '<div style="padding:20px;font-family:var(--font-mono);font-size:0.8rem;color:var(--text3);text-align:center;">Ожидание завершения полуфинала...</div>';
+        } else {
+            let tm1 = t.teams.find(x=>x.id===t.final.t1) || t.teams[t.final.t1];
+            let tm2 = t.teams.find(x=>x.id===t.final.t2) || t.teams[t.final.t2];
+            html += `<div class="section-label" style="color:var(--yellow);">// ЭТАП 5: ГРАНД-ФИНАЛ ГАЛА-ТУРНИРА</div>
+            <div style="background:var(--panel2); padding:30px; border:2px solid var(--yellow); border-radius:8px; text-align:center; box-shadow:0 0 30px rgba(255,215,0,0.1);">
+               <div style="font-family:var(--font-head); font-size:2rem; margin-bottom:30px;">
+                  <span style="color:${TEAM_COLOR_VALS[tm1.id]}">${tm1.name}</span> 
+                  <span style="color:var(--text3); font-size:1.2rem; margin:0 20px;">VS</span> 
+                  <span style="color:${TEAM_COLOR_VALS[tm2.id]}">${tm2.name}</span>
+               </div>
+               <div style="color:var(--yellow); margin-bottom:15px; font-family:var(--font-mono); text-transform:uppercase;">ПОБЕДЫ В МИНИ-ИГРАХ (ДО 3)</div>
+               <div style="display:flex; justify-content:center; gap:30px;">
+                   <div style="font-size:5rem; font-family:var(--font-head); color:${TEAM_COLOR_VALS[tm1.id]}; text-shadow:0 0 20px ${TEAM_COLOR_VALS[tm1.id]}">${t.final.w1}</div>
+                   <div style="font-size:5rem; font-family:var(--font-head); color:var(--text3)">:</div>
+                   <div style="font-size:5rem; font-family:var(--font-head); color:${TEAM_COLOR_VALS[tm2.id]}; text-shadow:0 0 20px ${TEAM_COLOR_VALS[tm2.id]}">${t.final.w2}</div>
+               </div>`;
+            if (t.final.winnerId !== null && t.final.winnerId !== undefined) {
+               const finWinTm = t.teams.find(x=>x.id===t.final.winnerId) || t.teams[t.final.winnerId];
+               html += `<div style="margin-top:30px; color:var(--yellow); font-family:var(--font-head); font-size:1.8rem; text-shadow:0 0 15px rgba(255,215,0,0.5);">🌟 АБСОЛЮТНЫЙ ЧЕМПИОН: ${finWinTm?.name || ''} 🌟</div>`;
+            }
+            html += `</div>`;
+        }
+    }
+    
+    container.innerHTML = html;
+
+    if (publicGalaTab === 3) {
+        renderDeathmatchPublic(document.getElementById('gala-dm-subcontainer'), t.teams, t.s3.activeEvent, t.s3.eventsLog, null, null, null, true);
+    }
+}
+
+function generateDetailsHtml(m, c1, c2, tm1, tm2) {
+   if (m.maps) {
+       if (m.maps.length === 0) return '';
+       return `<div style="display:flex; flex-direction:column; gap:10px; margin-top:10px;">
+           ${m.maps.map((map, i) => {
+              let s1 = (map.t1Scores||[]).reduce((a,b)=>a+b,0); let s2 = (map.t2Scores||[]).reduce((a,b)=>a+b,0);
+              let wCol = s1 > s2 ? c1 : (s2 > s1 ? c2 : '#fff');
+              return `<div style="background:rgba(0,0,0,0.3); padding:8px 12px; border-radius:4px; border-left:2px solid ${wCol};">
+                 <div style="font-size:0.65rem; color:var(--text3); margin-bottom:6px; font-family:var(--font-mono); text-transform:uppercase;">Карта ${i+1} <span style="float:right; color:#fff; font-weight:bold;">${s1} : ${s2}</span></div>
+                 <div style="display:grid; grid-template-columns:repeat(6, 1fr); gap:4px;">
+                    ${(map.t1Scores||[]).map((score1, idx) => `<div style="text-align:center; background:rgba(255,255,255,0.05); padding:4px 0; border-radius:2px;">
+                           <div style="color:${c1}; font-size:0.6rem; font-weight:bold; margin-bottom:2px;">${score1}</div><div style="color:${c2}; font-size:0.6rem; font-weight:bold;">${(map.t2Scores||[])[idx]}</div>
+                        </div>`).join('')}
+                 </div></div>`;
+           }).join('')}</div>`;
+   } else {
+       const r = m.rounds || [];
+       if (r.length === 0) return '';
+       return `<div class="ro-list">${r.map((rnd, i) => `<div class="ro-box" style="background:${rnd===1?c1:c2};" title="${rnd===1?tm1.name:tm2.name}">${i+1}</div>`).join('')}</div>`;
+   }
+}
+
+function renderAllMatchesPublic() {
+  const t = STATE.tournament;
+  if (!t || t.type === 'deathmatch') return;
+  if (t.type === 'gala') {
+    const galaContainer = document.getElementById('gala-public-container');
+    if (galaContainer && galaContainer.style.display !== 'none') renderGalaPublic(galaContainer);
+    return;
+  }
+
+  const container = document.getElementById('all-matches-display');
+  const bracketCont = document.getElementById('playoff-bracket-container');
+  const bracketDisp = document.getElementById('gauntlet-display');
+  const playoffLabel = document.getElementById('playoff-label');
+  
+  const openDetails = new Set();
+  if (container) container.querySelectorAll('.round-order-details[open]').forEach(d => { if (d.dataset.mid) openDetails.add(d.dataset.mid); });
+
+  container.innerHTML = t.matches.map((m, mi) => {
+    const tm1 = t.teams[m.t1]; const tm2 = t.teams[m.t2];
+    const res = checkMatchDone(m, false, t.type);
+    let s1_disp = 0, s2_disp = 0;
+    if (t.type === 'ascension') { const ph = getMatchPhaseAscension(m); s1_disp = ph.rating1; s2_disp = ph.rating2; } 
+    else { const ph = getMatchPhase(m, t.type); s1_disp = ph.s1; s2_disp = ph.s2; }
+
+    let resultLabel = res ? (res.draw ? 'Ничья' : `Победа ${res.winner===1?tm1.name:tm2.name}`) : (s1_disp>0||s2_disp>0 ? 'В игре' : 'Ожидание');
+    const c1 = TEAM_COLOR_VALS[m.t1]; const c2 = TEAM_COLOR_VALS[m.t2];
+    const isOpen = openDetails.has(`m${mi}`) ? 'open' : '';
+    let detailsHtml = generateDetailsHtml(m, c1, c2, tm1, tm2);
+
+    return `<div class="match-wrap"><div class="mini-match">
+          <div class="mini-team" style="color:${c1}">${tm1.name}</div><div class="mini-score">${s1_disp} : ${s2_disp}</div>
+          <div class="mini-team right" style="color:${c2}">${tm2.name}</div><div class="mini-result">${resultLabel}</div>
+        </div>${detailsHtml !== '' ? `
+        <details class="round-order-details" ${isOpen} data-mid="m${mi}"><summary>▼ ${t.type === 'ascension' ? 'Детали карт (Тур за туром)' : 'Порядок раундов'}</summary>${detailsHtml}</details>` : ''}
+      </div>`;
+  }).join('');
+  
+  if (t.playoffs && bracketCont && bracketDisp) {
+    bracketCont.style.display = 'block';
+    if(playoffLabel) playoffLabel.innerHTML = t.type === 'ascension' ? '// ПЛЕЙ-ОФФ (ВОСХОЖДЕНИЕ)' : '// ПЛЕЙ-ОФФ (СЕТКА)';
+    let html = '';
+    t.playoffs.forEach((m, mi) => {
+       const tm1 = m.t1 !== null ? t.teams[m.t1] : {name:'TBD'}; const tm2 = m.t2 !== null ? t.teams[m.t2] : {name:'TBD'};
+       const c1 = m.t1 !== null ? TEAM_COLOR_VALS[m.t1] : '#666'; const c2 = m.t2 !== null ? TEAM_COLOR_VALS[m.t2] : '#666';
+       let s1_disp = 0, s2_disp = 0;
+       if (t.type === 'ascension') { const ph = getMatchPhaseAscension(m); s1_disp = ph.maps1; s2_disp = ph.maps2; } 
+       else { const ph = getMatchPhase(m, t.type); s1_disp = ph.s1; s2_disp = ph.s2; }
+       const isFinal = mi === 2; const isOpen = openDetails.has(`p${mi}`) ? 'open' : '';
+       let detailsHtml = generateDetailsHtml(m, c1, c2, tm1, tm2);
+       html += `<div class="g-match-box ${isFinal ? 'g-final' : ''}" style="display:block;">
+           <div style="display:flex; justify-content:space-between; align-items:center;">
+             <div class="g-label">${m.name}</div><div class="g-team" style="color:${c1}">${tm1.name}</div>
+             <div class="g-score">${s1_disp} : ${s2_disp}</div><div class="g-team" style="color:${c2}">${tm2.name}</div>
+           </div>${detailsHtml !== '' ? `
+            <details class="round-order-details" style="margin-top:15px; border-top:1px dashed var(--border2); background:rgba(0,0,0,0.15);" ${isOpen} data-mid="p${mi}"><summary>▼ ${t.type === 'ascension' ? 'Детали карт (Тур за туром)' : 'Порядок раундов'}</summary>${detailsHtml}</details>` : ''}
+         </div>`;
+       if (mi < 2) html += `<div class="g-connector"></div>`;
+    });
+    bracketDisp.innerHTML = html.split('</div><div class="g-connector"></div>').reverse().join('</div><div class="g-connector"></div>');
+  } else if (bracketCont) { bracketCont.style.display = 'none'; }
+}
+
+function renderHistory() {
+   const container = document.getElementById('history-list');
+   if(!container) return;
+   if(!STATE.history || STATE.history.length === 0) { container.innerHTML = '<div class="no-requests">История турниров пуста</div>'; return; }
+
+   container.innerHTML = STATE.history.map(h => {
+       let winnerHtml = '<span style="color:var(--text3)">Турнир не был завершён</span>';
+       if (h.aborted) winnerHtml = '<span style="color:var(--red)">Турнир отменён досрочно</span>';
+       else if (h.winnerHtml) winnerHtml = h.winnerHtml;
+
+       const teamList = h.teams.map(t => `<span style="color:var(--text)">${t.name}</span>`).join(' / ');
+       const prizeHtml = h.prize ? `<div style="font-family:var(--font-mono);font-size:0.75rem;color:var(--yellow);margin-bottom:8px;">🏆 Награда: ${escHtml(h.prize)}</div>` : '';
+       let typeLabel = '';
+       if (h.type === 'gala') typeLabel = '🌟 ГАЛА-ТУРНИР';
+       else if (h.type === 'ascension') typeLabel = '⚔️ ВОСХОЖДЕНИЕ';
+       else if (h.type === 'deathmatch') typeLabel = '💀 DEATHMATCH';
+       else typeLabel = '🏯 ОСАДА';
+       
+       const delBtn = STATE.adminLogged ? `<button class="btn" style="border-color:var(--red);color:var(--red);padding:6px 12px;font-size:0.6rem;margin-top:15px;" onclick="deleteHistory(${h.id})">Удалить запись</button>` : '';
+
+       return `<div class="match-wrap" style="padding:1.5rem; display:block;">
+           <div style="font-family:var(--font-mono);font-size:0.7rem;color:var(--cyan);margin-bottom:10px;">${typeLabel} · ДАТА: ${h.date}</div>
+           ${prizeHtml}
+           <div style="margin-bottom:15px;">${winnerHtml}</div>
+           <div style="font-family:var(--font-mono);font-size:0.8rem;color:var(--text2);">Участники: ${teamList}</div>
+           ${delBtn}
+       </div>`;
+   }).join('');
+}
+
+window.deleteHistory = function(id) {
+   if(!confirm('Точно удалить эту запись из истории? Это действие нельзя отменить.')) return;
+   STATE.history = STATE.history.filter(h => h.id !== id); save(); renderHistory(); toast('Запись удалена', true);
 }
 
 function renderRequests() {
   const list = document.getElementById('requests-list');
   const badge = document.getElementById('req-badge');
-  if(!list) return;
   badge.textContent = STATE.requests.length;
+
   if (STATE.requests.length === 0) { list.innerHTML = '<div class="no-requests">Нет новых заявок</div>'; return; }
-  list.innerHTML = STATE.requests.map(r => `
-    <div class="req-item">
-        <div class="req-nickname">${r.nickname}</div>
-        <button class="req-btn req-btn-del" onclick="deleteReq(${r.id})">Удалить</button>
-    </div>`).join('');
+  const sortedReqs = [...STATE.requests].sort((a,b) => a.status === 'pending' ? -1 : 1);
+  list.innerHTML = sortedReqs.map(r => {
+    let actions = '';
+    if (r.status === 'pending') {
+      actions = `<div class="req-actions"><button class="req-btn req-btn-accept" onclick="resolveReq(${r.id}, 'accepted')">Принять</button><button class="req-btn req-btn-del" onclick="deleteReq(${r.id})">Удалить</button></div>`;
+    } else if (r.status === 'accepted') {
+      if (STATE.tournament && STATE.tournament.type !== 'deathmatch' && STATE.tournament.type !== 'gala') {
+        let options = STATE.tournament.teams.map(t => `<option value="${t.id}" ${r.teamId===t.id?'selected':''}>${t.name}</option>`).join('');
+        actions = `<select class="form-select" style="padding:4px;font-size:0.7rem;margin-top:5px;border-color:var(--green);width:100%;" onchange="assignPlayer(${r.id}, this.value)"><option value="">-- Назначить в команду --</option>${options}</select><button class="req-btn req-btn-del" style="margin-top:5px;width:100%;" onclick="deleteReq(${r.id})">Удалить заявку</button>`;
+      } else {
+        actions = `<span style="color:var(--green);font-size:0.7rem;display:block;">Принята</span><button class="req-btn req-btn-del" style="margin-top:5px;" onclick="deleteReq(${r.id})">Удалить</button>`;
+      }
+    }
+    const typeLabel = r.type === 'gala' ? 'Гала-Турнир' : (r.type === 'ascension' ? 'Восхождение' : (r.type === 'deathmatch' ? 'Deathmatch' : 'Осада'));
+    return `<div class="req-item"><div class="req-nickname">${escHtml(r.nickname)}</div><div class="req-type">// ${typeLabel}</div>${actions}</div>`;
+  }).join('');
 }
 
-// ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-window.addRound = function(mi, side, isP) {
-    const m = isP ? STATE.tournament.playoffs[mi] : (STATE.tournament.type === 'gala' ? STATE.tournament.s1[mi] : STATE.tournament.matches[mi]);
-    m.rounds.push(side); recalcStandings(); save();
+window.resolveReq = function(id, status) {
+  const r = STATE.requests.find(x => x.id === id);
+  if (r) { r.status = status; if(status!=='accepted') r.teamId = null; }
+  save(); renderRequests(); toast(status === 'accepted' ? '✓ Заявка принята' : '✕ Заявка отклонена', status !== 'accepted');
 };
 
 window.deleteReq = function(id) {
-    STATE.requests = STATE.requests.filter(x => x.id !== id); save();
-};
-
-function toast(msg) {
-    const el = document.getElementById('toast');
-    el.textContent = msg; el.classList.add('show');
-    setTimeout(() => el.classList.remove('show'), 2500);
+  if(!confirm('Точно удалить эту заявку?')) return;
+  STATE.requests = STATE.requests.filter(x => x.id !== id); save(); renderRequests(); renderPublicStandings(); toast('Заявка удалена', true);
 }
 
-// НАВИГАЦИЯ (ИСПРАВЛЕНО)
+window.assignPlayer = function(id, teamId) {
+  const r = STATE.requests.find(x => x.id === id);
+  if (r) { r.teamId = teamId === "" ? null : parseInt(teamId); } save(); renderPublicStandings(); toast('Игрок перенесён');
+};
+
+function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+let toastTimer;
+function toast(msg, isError = false) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.className = 'toast show' + (isError ? ' error' : '');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.className = 'toast', 2500);
+}
+
 document.querySelectorAll('.nav-links a').forEach(a => {
   a.addEventListener('click', e => {
     e.preventDefault();
     document.querySelectorAll('.nav-links a').forEach(x => x.classList.remove('active')); a.classList.add('active');
+    const page = a.dataset.page;
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    document.getElementById('page-' + a.dataset.page).classList.add('active');
-    if(a.dataset.page === 'standings') { renderPublicStandings(); renderAllMatchesPublic(); }
+    document.getElementById('page-' + page).classList.add('active');
+    if (page === 'standings') { renderPublicStandings(); renderAllMatchesPublic(); }
+    if (page === 'history') { renderHistory(); }
+    if (page === 'admin' && STATE.adminLogged) { renderRequests(); renderMatches(); renderStandings(); }
   });
 });
 
-// МОДАЛКИ
-document.querySelectorAll('.open-req-btn').forEach(b => {
-    b.onclick = () => document.getElementById('request-modal').classList.add('open');
+document.querySelectorAll('.open-req-btn').forEach(btn => {
+  btn.addEventListener('click', (e) => {
+    document.getElementById('request-modal').classList.add('open');
+    document.getElementById('modal-body-content').style.display = ''; document.querySelector('.modal-footer').style.display = ''; document.getElementById('success-msg').classList.remove('show');
+    if (e.target.dataset.mode) document.getElementById('req-type').value = e.target.dataset.mode;
+  });
 });
-document.getElementById('close-modal-btn').onclick = () => document.getElementById('request-modal').classList.remove('open');
 
-document.getElementById('submit-request-btn').onclick = () => {
-    const nick = document.getElementById('req-nickname').value;
-    if(!nick) return;
-    STATE.requests.push({ id: Date.now(), nickname: nick, status: 'pending' });
-    save(); document.getElementById('request-modal').classList.remove('open');
-};
+['close-modal-btn','cancel-modal-btn'].forEach(id => {
+  document.getElementById(id).addEventListener('click', () => document.getElementById('request-modal').classList.remove('open'));
+});
 
-document.getElementById('admin-login-btn').onclick = () => {
-    if(document.getElementById('admin-pass-input').value === 'admin123') {
-        STATE.adminLogged = true;
-        document.getElementById('admin-login-box').style.display = 'none';
-        document.getElementById('admin-main-panel').style.display = 'block';
-        renderRequests(); renderMatches();
+document.getElementById('submit-request-btn').addEventListener('click', () => {
+  const nick = document.getElementById('req-nickname').value.trim();
+  if (!nick) { toast('Введите никнейм!', true); return; }
+  const nickLower = nick.toLowerCase();
+  if (STATE.requests.some(r => r.nickname.toLowerCase() === nickLower)) { toast('Игрок с таким ником уже подал заявку!', true); return; }
+  STATE.requests.push({ id: Date.now(), nickname: nick, type: document.getElementById('req-type').value, note: document.getElementById('req-note').value.trim(), status: 'pending', time: new Date().toLocaleString('ru-RU') });
+  save(); document.getElementById('modal-body-content').style.display = 'none'; document.querySelector('.modal-footer').style.display = 'none'; document.getElementById('success-msg').classList.add('show');
+  setTimeout(() => { document.getElementById('request-modal').classList.remove('open'); document.getElementById('req-nickname').value=''; document.getElementById('req-note').value=''; }, 2000);
+  if (STATE.adminLogged) renderRequests();
+});
+
+document.getElementById('admin-login-btn').addEventListener('click', () => {
+  if (document.getElementById('admin-pass-input').value === STATE.adminPass) {
+    STATE.adminLogged = true; document.getElementById('admin-login-box').classList.add('hide'); document.getElementById('admin-main-panel').classList.add('show');
+    renderRequests(); checkTournamentInit(); renderMatches(); renderStandings();
+    if(document.getElementById('page-history').classList.contains('active')) renderHistory();
+  } else toast('Неверный пароль', true);
+});
+
+document.getElementById('init-tournament-btn').addEventListener('click', () => {
+  const names = [ document.getElementById('t1-name').value.trim() || 'ALPHA', document.getElementById('t2-name').value.trim() || 'BRAVO', document.getElementById('t3-name').value.trim() || 'CHARLIE', document.getElementById('t4-name').value.trim() || 'DELTA' ];
+  const prize = document.getElementById('t-prize').value.trim(); const formatType = document.getElementById('t-format').value;
+  initTournament(names, prize, formatType); document.getElementById('team-setup-box').style.display = 'none';
+  recalcStandings(); renderMatches(); renderRequests(); toast('Турнир создан!');
+});
+
+// Глобальные уведомления
+let lastNotifyTime = Date.now(); 
+let notifyTimer = null;
+setInterval(() => {
+  const notifStr = localStorage.getItem('bf_notify');
+  if (notifStr) {
+    const notif = JSON.parse(notifStr);
+    if (notif.time > lastNotifyTime && (Date.now() - notif.time < 10000)) {
+      lastNotifyTime = notif.time; 
+      if(notif.sound) playSound(notif.sound);
+      showGlobalNotification(notif.title, notif.text, notif.isPlayoff, notif.isFinal, notif.players);
     }
-};
+  }
+}, 1000);
 
-document.getElementById('init-tournament-btn').onclick = () => {
-    initTournament([
-        document.getElementById('t1-name').value, document.getElementById('t2-name').value,
-        document.getElementById('t3-name').value, document.getElementById('t4-name').value
-    ], '', document.getElementById('t-format').value);
-};
+function showGlobalNotification(title, htmlContent, isPlayoff, isFinal, playersHtml) {
+  let el = document.getElementById('global-notify-box');
+  if (!el) { el = document.createElement('div'); el.id = 'global-notify-box'; document.body.appendChild(el); }
+  if (notifyTimer) clearTimeout(notifyTimer);
+  
+  el.className = 'global-notify'; 
+  if (isFinal) el.classList.add('final-win');
+  
+  let content = `<div class="gn-close" onclick="this.parentElement.classList.remove('show')">✕</div>`;
+  content += `<div class="gn-title">${title}</div><div class="gn-text">${htmlContent}</div>`;
+  if(playersHtml) content += `<div class="gn-players">${playersHtml}</div>`;
+  
+  el.innerHTML = content; el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
+  if (isPlayoff) { if (isFinal) playSound('epic'); else playSound('triumph'); }
+  notifyTimer = setTimeout(() => el.classList.remove('show'), isFinal ? 10000 : 6000);
+}
 
-// FIREBASE СЛУШАТЕЛЬ
+// Звуки
+let lastSoundTime = Date.now();
+setInterval(() => {
+   const sndStr = localStorage.getItem('bf_sound');
+   if(sndStr) {
+       const snd = JSON.parse(sndStr);
+       if(snd.time > lastSoundTime && (Date.now() - snd.time < 5000)) {
+           lastSoundTime = snd.time; playSound(snd.type);
+       }
+   }
+}, 500);
+
+// ==========================================
+// FIREBASE REAL-TIME СИНХРОНИЗАЦИЯ И ВОССТАНОВЛЕНИЕ ДАННЫХ
+// ==========================================
 let isFirstLoad = true;
-db.ref('blockfest_data').on('value', (snap) => {
-    const data = snap.val();
-    if(data) {
-        STATE.requests = data.requests || [];
-        STATE.tournament = data.tournament || null;
-        STATE.history = data.history || [];
+
+db.ref('blockfest_data').on('value', (snapshot) => {
+  const data = snapshot.val();
+  
+  if (data) {
+    STATE.requests = data.requests || [];
+    STATE.history = data.history || [];
+    
+    let t = data.tournament || null;
+    if (t) {
+        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Восстанавливаем пустые массивы, которые удаляет Firebase
+        const repairMatch = (m) => {
+            m.rounds = m.rounds || [];
+            m.maps = m.maps || [];
+            m.maps.forEach(map => {
+                map.t1Scores = map.t1Scores || [];
+                map.t2Scores = map.t2Scores || [];
+            });
+        };
+
+        if (t.type === 'gala') {
+            if(t.s1) t.s1.forEach(repairMatch);
+            if(t.s2) t.s2.forEach(repairMatch);
+            if(!t.s3) t.s3 = { kills: [0,0,0,0], times: [0,0,0,0], eventsLog: [] };
+            t.s3.kills = t.s3.kills || [0,0,0,0];
+            t.s3.times = t.s3.times || [0,0,0,0];
+            t.s3.eventsLog = t.s3.eventsLog || [];
+            if(t.semi) {
+                t.semi.ascMaps = t.semi.ascMaps || [];
+                t.semi.ascMaps.forEach(map => { map.t1Scores = map.t1Scores || []; map.t2Scores = map.t2Scores || []; });
+            }
+        } else if (t.type === 'deathmatch') {
+            t.eventsLog = t.eventsLog || [];
+            if (t.tiebreaker && t.tiebreaker.teams) {
+                t.tiebreaker.teams.forEach(tm => { tm.kills = tm.kills || 0; });
+            }
+        } else {
+            if(t.matches) t.matches.forEach(repairMatch);
+            if(t.playoffs) t.playoffs.forEach(repairMatch);
+        }
+        t.standings = t.standings || [];
     }
-    checkTournamentInit(); renderRequests(); renderMatches();
-    if (document.getElementById('page-standings').classList.contains('active')) renderPublicStandings();
-    if (isFirstLoad && STATE.tournament) { recalcStandings(); isFirstLoad = false; }
+    STATE.tournament = t;
+  } else {
+    STATE.requests = []; STATE.tournament = null; STATE.history = [];
+  }
+
+  // Обновляем экраны у всех
+  if (document.getElementById('page-standings').classList.contains('active')) { renderPublicStandings(); renderAllMatchesPublic(); }
+  if (document.getElementById('page-admin').classList.contains('active') && STATE.adminLogged) { checkTournamentInit(); renderMatches(); renderStandings(); renderRequests(); }
+  if (document.getElementById('page-history').classList.contains('active')) { renderHistory(); }
+
+  // Базовая проверка при заходе на сайт
+  if (isFirstLoad) {
+     checkTournamentInit();
+     if (STATE.tournament) { recalcStandings(); renderAllMatchesPublic(); checkPlayoffs(); }
+     isFirstLoad = false;
+  }
 });
 </script>
 </body>
