@@ -454,7 +454,7 @@ const STATE = {
   tournament: null,
   history: [],
   adminLogged: false,
-  adminPass: 'admin123'
+  adminPass: 'Hunter5858RXS!'
 };
 
 let adminGalaTab = 1;
@@ -1122,6 +1122,7 @@ function buildMatchCard(m, mi, isPlayoff = false, overrideType) {
                })() : ''}
             </div>
             ${played > 0 ? `<div style="padding:0 1rem 1rem; text-align:center;"><button class="btn" onclick="undoAscensionTour(${mi}, ${isPlayoff})" style="font-size:0.6rem; padding:6px 12px; margin-top:5px; border-color:var(--orange);color:var(--orange);">↩ Отменить последний тур</button></div>` : ''}`;
+      } else {
           controls += `<div style="text-align:center; padding:10px; border-top:1px solid var(--border); font-family:var(--font-mono); font-size:0.6rem; color:var(--text3);">КЛИКАЙТЕ НА СТОРОНУ ЧТОБЫ ДОБАВИТЬ РАУНД</div>
             ${played > 0 ? `<div style="padding:0 1rem 1rem; text-align:center;"><button class="btn" onclick="undoRound(${mi}, ${isPlayoff})" style="font-size:0.6rem; padding:6px 12px;">Отменить последний раунд</button></div>` : ''}`;
       }
@@ -1917,11 +1918,40 @@ document.getElementById('submit-request-btn').addEventListener('click', () => {
 });
 
 document.getElementById('admin-login-btn').addEventListener('click', () => {
+  const now = Date.now();
+  const lockoutEnd = localStorage.getItem('blockfest_lockout');
+
+  if (lockoutEnd && now < parseInt(lockoutEnd)) {
+    const remainingMinutes = Math.ceil((parseInt(lockoutEnd) - now) / 60000);
+    toast(`Доступ заблокирован. Попробуйте через ${remainingMinutes} мин.`, true);
+    return;
+  } else if (lockoutEnd && now >= parseInt(lockoutEnd)) {
+    localStorage.removeItem('blockfest_lockout');
+    localStorage.setItem('blockfest_attempts', '0');
+  }
+
+  let attempts = parseInt(localStorage.getItem('blockfest_attempts') || '0');
+
   if (document.getElementById('admin-pass-input').value === STATE.adminPass) {
-    STATE.adminLogged = true; document.getElementById('admin-login-box').classList.add('hide'); document.getElementById('admin-main-panel').classList.add('show');
+    STATE.adminLogged = true;
+    localStorage.setItem('blockfest_attempts', '0'); 
+    
+    document.getElementById('admin-login-box').classList.add('hide'); 
+    document.getElementById('admin-main-panel').classList.add('show');
+    
     renderRequests(); checkTournamentInit(); renderMatches(); renderStandings();
     if(document.getElementById('page-history').classList.contains('active')) renderHistory();
-  } else toast('Неверный пароль', true);
+  } else {
+    attempts++;
+    localStorage.setItem('blockfest_attempts', attempts.toString());
+
+    if (attempts >= 3) {
+      localStorage.setItem('blockfest_lockout', (now + 3600000).toString());
+      toast('Превышен лимит попыток. Блокировка на 1 час.', true);
+    } else {
+      toast(`Неверный пароль. Осталось попыток: ${3 - attempts}`, true);
+    }
+  }
 });
 
 document.getElementById('init-tournament-btn').addEventListener('click', () => {
