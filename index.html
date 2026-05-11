@@ -431,32 +431,7 @@ nav { position: fixed; top: 0; left: 0; right: 0; z-index: 1000; background: rgb
 
 <div class="toast" id="toast"></div>
 
-<script type="module">
-  // 1. Импортируем Firebase напрямую через интернет
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
-
-  // 2. ТВОЙ конфиг со скриншота
-  const firebaseConfig = {
-    apiKey: "AIzaSyB4NhB1pHAFdGJTTd6FMrww1fCz-Ur3TsQ",
-    authDomain: "blockfast-de520.firebaseapp.com",
-    projectId: "blockfast-de520",
-    storageBucket: "blockfast-de520.firebasestorage.app",
-    messagingSenderId: "174119804874",
-    appId: "1:174119804874:web:53494370e2c171ea253933",
-    measurementId: "G-9BZEH2RJ85"
-  };
-
-  // 3. Запускаем Firebase и Базу Данных
-  const app = initializeApp(firebaseConfig);
-  window.db = getDatabase(app); // Сохраняем базу в window, чтобы к ней был доступ везде
-
-  // ==========================================
-  // ДАЛЬШЕ ИДЕТ ТВОЙ СТАРЫЙ КОД
-  // ==========================================
-  const STATE = {
-    requests: JSON.parse(localStorage.getItem('bf_requests') || '[]'),
-    // ... и так далее
+<script>
 const STATE = {
   requests: JSON.parse(localStorage.getItem('bf_requests') || '[]'),
   tournament: JSON.parse(localStorage.getItem('bf_tournament') || 'null'),
