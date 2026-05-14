@@ -7,6 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;900&family=Share+Tech+Mono&family=Exo+2:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
 <style>
 :root {
   --bg: #050a0f; --bg2: #080f17; --bg3: #0d1821;
@@ -453,26 +455,44 @@ nav { position: fixed; top: 0; left: 0; right: 0; z-index: 1000; background: rgb
 <div class="toast" id="toast"></div>
 
 <script>
-const STATE = {
-  requests: JSON.parse(localStorage.getItem('bf_requests') || '[]'),
-  tournament: JSON.parse(localStorage.getItem('bf_tournament') || 'null'),
-  history: JSON.parse(localStorage.getItem('bf_history') || '[]'),
+// ==========================================
+// FIREBASE ИНИЦИАЛИЗАЦИЯ (ВСТАВИТЬ СЮДА ДАННЫЕ)
+// ==========================================
+const firebaseConfig = {
+  apiKey: "ВСТАВЬ_СВОЙ_API_KEY",
+  authDomain: "ВСТАВЬ_СВОЙ_AUTH_DOMAIN",
+  databaseURL: "ВСТАВЬ_СВОЙ_DATABASE_URL", // ОБЯЗАТЕЛЬНО УБЕДИСЬ ЧТО ОН ЕСТЬ!
+  projectId: "ВСТАВЬ_СВОЙ_PROJECT_ID",
+  storageBucket: "ВСТАВЬ_СВОЙ_STORAGE_BUCKET",
+  messagingSenderId: "ВСТАВЬ_СВОЙ_MESSAGING_SENDER_ID",
+  appId: "ВСТАВЬ_СВОЙ_APP_ID"
+};
+
+// Инициализация Firebase
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+let STATE = {
+  requests: [],
+  tournament: null,
+  history: [],
   adminLogged: false,
   adminPass: 'admin123'
 };
 
+// ФУНКЦИЯ СОХРАНЕНИЯ ТЕПЕРЬ ПИШЕТ В ОБЛАКО
 function save() {
-  localStorage.setItem('bf_requests', JSON.stringify(STATE.requests));
-  if (STATE.tournament) localStorage.setItem('bf_tournament', JSON.stringify(STATE.tournament));
-  else localStorage.removeItem('bf_tournament');
-  localStorage.setItem('bf_history', JSON.stringify(STATE.history));
+  db.ref('blockfest_data').set({
+    requests: STATE.requests || [],
+    tournament: STATE.tournament || null,
+    history: STATE.history || []
+  });
 }
 
 const TEAM_COLOR_VALS = ['#00c8ff','#ff6b00','#00ff9d','#a855f7'];
 const TEAM_BGS = ['team-bg-1','team-bg-2','team-bg-3','team-bg-4'];
 const MAPS = ['FOREST', 'DUST', 'OFFICE', 'HOUSE', 'NETHER'];
 
-// Изображения блоков из Minecraft
 const MAP_IMAGES = {
     'FOREST': 'https://raw.githubusercontent.com/InventivetalentDev/minecraft-assets/1.20.1/assets/minecraft/textures/block/oak_log.png',
     'DUST': 'https://raw.githubusercontent.com/InventivetalentDev/minecraft-assets/1.20.1/assets/minecraft/textures/block/sand.png',
@@ -508,28 +528,14 @@ function checkTournamentInit() {
   }
 }
 
-// ───────────────────────────────────────────────
-// ВСПОМОГАТЕЛЬНАЯ ЛОГИКА
-// ───────────────────────────────────────────────
-
 function getSiegeSides(tm1, tm2, draft, playedRounds) {
     if (!draft || draft.atk === null) return { left: tm1, right: tm2, swapped: false, leftIcon: '', rightIcon: '' };
     let initialAtkId = draft.atk;
     let swapped = false;
-    
-    // Смена сторон ТОЛЬКО после первых 9 раундов (т.е. на 10-21 раундах)
     if (playedRounds >= 9 && playedRounds < 21) swapped = true;
-
     let atkTeam = (initialAtkId === tm1.id) ? (swapped ? tm2 : tm1) : (swapped ? tm1 : tm2);
     let defTeam = (atkTeam.id === tm1.id) ? tm2 : tm1;
-
-    return {
-        left: atkTeam,
-        right: defTeam,
-        swapped: swapped,
-        leftIcon: '⚔️',
-        rightIcon: '🛡️'
-    };
+    return { left: atkTeam, right: defTeam, swapped: swapped, leftIcon: '⚔️', rightIcon: '🛡️' };
 }
 
 function getMatchPhaseAscension(m) {
@@ -537,23 +543,23 @@ function getMatchPhaseAscension(m) {
     let maps1 = 0, maps2 = 0;
     let rating1 = 0, rating2 = 0;
     m.maps.forEach(map => {
-        let s1 = map.t1Scores.reduce((a,b)=>a+b,0);
-        let s2 = map.t2Scores.reduce((a,b)=>a+b,0);
+        let s1 = map.t1Scores ? map.t1Scores.reduce((a,b)=>a+b,0) : 0;
+        let s2 = map.t2Scores ? map.t2Scores.reduce((a,b)=>a+b,0) : 0;
         rating1 += s1; rating2 += s2;
-        if (map.t1Scores.length === 6) { if(s1 > s2) maps1++; else if (s2 > s1) maps2++; }
+        if (map.t1Scores && map.t1Scores.length === 6) { if(s1 > s2) maps1++; else if (s2 > s1) maps2++; }
     });
-    let totalTours = m.maps.reduce((acc, map) => acc + map.t1Scores.length, 0);
+    let totalTours = m.maps.reduce((acc, map) => acc + (map.t1Scores ? map.t1Scores.length : 0), 0);
     return { maps1, maps2, rating1, rating2, totalTours };
 }
 
 function getMatchPhase(m) {
-  const reg1 = m.rounds.slice(0, 18).filter(r => r === 1).length;
-  const reg2 = m.rounds.slice(0, 18).filter(r => r === 2).length;
-  const ot1 = m.rounds.slice(18, 24).filter(r => r === 1).length;
-  const ot2 = m.rounds.slice(18, 24).filter(r => r === 2).length;
-  const sd1 = m.rounds.slice(24).filter(r => r === 1).length;
-  const sd2 = m.rounds.slice(24).filter(r => r === 2).length;
-  return { s1: reg1 + ot1 + sd1, s2: reg2 + ot2 + sd2, played: m.rounds.length };
+  const reg1 = m.rounds ? m.rounds.slice(0, 18).filter(r => r === 1).length : 0;
+  const reg2 = m.rounds ? m.rounds.slice(0, 18).filter(r => r === 2).length : 0;
+  const ot1 = m.rounds ? m.rounds.slice(18, 24).filter(r => r === 1).length : 0;
+  const ot2 = m.rounds ? m.rounds.slice(18, 24).filter(r => r === 2).length : 0;
+  const sd1 = m.rounds ? m.rounds.slice(24).filter(r => r === 1).length : 0;
+  const sd2 = m.rounds ? m.rounds.slice(24).filter(r => r === 2).length : 0;
+  return { s1: reg1 + ot1 + sd1, s2: reg2 + ot2 + sd2, played: m.rounds ? m.rounds.length : 0 };
 }
 
 function checkMapDone_Siege(rounds) {
@@ -589,7 +595,7 @@ function checkMatchDone(m, isPlayoff = false) {
      } else {
         if (ph.maps1 >= 2) return { done: true, winner: 1, draw: false };
         if (ph.maps2 >= 2) return { done: true, winner: 2, draw: false };
-        if (m.maps.length === 3 && m.maps[2].t1Scores.length === 6) {
+        if (m.maps && m.maps.length === 3 && m.maps[2].t1Scores && m.maps[2].t1Scores.length === 6) {
            if (ph.rating1 > ph.rating2) return { done: true, winner: 1, draw: false };
            if (ph.rating2 > ph.rating1) return { done: true, winner: 2, draw: false };
            return { done: true, winner: 1, draw: false }; 
@@ -625,23 +631,25 @@ function recalcStandings() {
 
   if (t.type === 'ascension') {
       t.teams.forEach(tm => { tm.mp = 0; tm.rating = 0; tm.mapW = 0; tm.mapL = 0; });
-      t.matches.forEach(m => {
-         if (!m.maps) return;
-         const tm1 = t.teams[m.t1]; const tm2 = t.teams[m.t2];
-         tm1.mp++; tm2.mp++;
-         const ph = getMatchPhaseAscension(m);
-         tm1.rating += ph.rating1; tm2.rating += ph.rating2;
-         tm1.mapW += ph.maps1; tm1.mapL += ph.maps2;
-         tm2.mapW += ph.maps2; tm2.mapL += ph.maps1;
-      });
+      if(t.matches) {
+        t.matches.forEach(m => {
+           if (!m.maps) return;
+           const tm1 = t.teams[m.t1]; const tm2 = t.teams[m.t2];
+           tm1.mp++; tm2.mp++;
+           const ph = getMatchPhaseAscension(m);
+           tm1.rating += ph.rating1; tm2.rating += ph.rating2;
+           tm1.mapW += ph.maps1; tm1.mapL += ph.maps2;
+           tm2.mapW += ph.maps2; tm2.mapL += ph.maps1;
+        });
+      }
       t.standings = [...t.teams].sort((a, b) => {
         if (b.rating !== a.rating) return b.rating - a.rating;
-        const hth = t.matches.find(m => (m.t1 === a.id && m.t2 === b.id) || (m.t1 === b.id && m.t2 === a.id));
-        if (hth) {
+        const hth = t.matches ? t.matches.find(m => (m.t1 === a.id && m.t2 === b.id) || (m.t1 === b.id && m.t2 === a.id)) : null;
+        if (hth && hth.maps) {
            let rA = 0, rB = 0;
            hth.maps.forEach(map => {
-              rA += (hth.t1 === a.id ? map.t1Scores : map.t2Scores).reduce((acc,val)=>acc+val,0);
-              rB += (hth.t1 === b.id ? map.t1Scores : map.t2Scores).reduce((acc,val)=>acc+val,0);
+              rA += map[hth.t1 === a.id ? 't1Scores' : 't2Scores'] ? map[hth.t1 === a.id ? 't1Scores' : 't2Scores'].reduce((acc,val)=>acc+val,0) : 0;
+              rB += map[hth.t1 === b.id ? 't1Scores' : 't2Scores'] ? map[hth.t1 === b.id ? 't1Scores' : 't2Scores'].reduce((acc,val)=>acc+val,0) : 0;
            });
            return rB - rA;
         }
@@ -649,16 +657,18 @@ function recalcStandings() {
       });
   } else {
       t.teams.forEach(tm => { tm.pts = 0; tm.mp = 0; tm.w = 0; tm.l = 0; tm.d = 0; tm.otw = 0; tm.otl = 0; tm.rw = 0; tm.rl = 0; });
-      t.matches.forEach(m => {
-        const res = checkMatchDone(m, false);
-        if (!res) return;
-        const tm1 = t.teams[m.t1]; const tm2 = t.teams[m.t2];
-        tm1.mp++; tm2.mp++;
-        tm1.rw += res.s1; tm1.rl += res.s2; tm2.rw += res.s2; tm2.rl += res.s1;
-        if (res.draw) { tm1.pts += 1; tm2.pts += 1; tm1.d++; tm2.d++; } 
-        else if (!res.ot) { if (res.winner === 1) { tm1.pts += 3; tm1.w++; tm2.l++; } else { tm2.pts += 3; tm2.w++; tm1.l++; } } 
-        else { if (res.winner === 1) { tm1.pts += 2; tm1.otw++; tm2.pts += 1; tm2.otl++; } else { tm2.pts += 2; tm2.otw++; tm1.pts += 1; tm1.otl++; } }
-      });
+      if(t.matches){
+        t.matches.forEach(m => {
+          const res = checkMatchDone(m, false);
+          if (!res) return;
+          const tm1 = t.teams[m.t1]; const tm2 = t.teams[m.t2];
+          tm1.mp++; tm2.mp++;
+          tm1.rw += res.s1; tm1.rl += res.s2; tm2.rw += res.s2; tm2.rl += res.s1;
+          if (res.draw) { tm1.pts += 1; tm2.pts += 1; tm1.d++; tm2.d++; } 
+          else if (!res.ot) { if (res.winner === 1) { tm1.pts += 3; tm1.w++; tm2.l++; } else { tm2.pts += 3; tm2.w++; tm1.l++; } } 
+          else { if (res.winner === 1) { tm1.pts += 2; tm1.otw++; tm2.pts += 1; tm2.otl++; } else { tm2.pts += 2; tm2.otw++; tm1.pts += 1; tm1.otl++; } }
+        });
+      }
       t.standings = [...t.teams].sort((a, b) => {
         if (b.pts !== a.pts) return b.pts - a.pts;
         return (b.rw - b.rl) - (a.rw - a.rl);
@@ -669,7 +679,7 @@ function recalcStandings() {
 function checkPlayoffs() {
   const t = STATE.tournament;
   if (!t) return;
-  const regDone = t.matches.every(m => checkMatchDone(m, false) !== null);
+  const regDone = t.matches ? t.matches.every(m => checkMatchDone(m, false) !== null) : false;
   
   if (regDone && !t.playoffs) {
     const isAsc = t.type === 'ascension';
@@ -707,18 +717,19 @@ function triggerNotification(m, isPlayoff, titlePrefix, isFinal = false) {
     
     let playersStr = "";
     if (winnerId !== null && isPlayoff) {
-      const pl = STATE.requests.filter(r => r.status === 'accepted' && r.teamId === winnerId).map(r => r.nickname);
+      const pl = (STATE.requests||[]).filter(r => r.status === 'accepted' && r.teamId === winnerId).map(r => r.nickname);
       if(pl.length > 0) playersStr = `Состав: ${pl.join(', ')}`;
     }
     
-    localStorage.setItem('bf_notify', JSON.stringify({
+    // Пишем уведомление в базу (чтобы у всех всплывало!)
+    db.ref('blockfest_notify').set({
       title: titlePrefix,
       text: `${tm1?tm1.name:'TBD'} vs ${tm2?tm2.name:'TBD'}<br><span style="color:var(--green);font-size:1.2rem;font-weight:700;">Победитель: ${winnerName}</span>`,
       players: playersStr,
       time: Date.now(),
       isPlayoff: isPlayoff,
       isFinal: isFinal
-    }));
+    });
   }
 }
 
@@ -776,22 +787,17 @@ window.startDraft = function(mi) {
     let teamLower = rankA < rankB ? m.t2 : m.t1;
     
     m.draftState = {
-        active: true,
-        step: 0,
-        tLower: teamLower,
-        tHigher: teamHigher,
-        picks: [],
-        phaseBans: [],
+        active: true, step: 0, tLower: teamLower, tHigher: teamHigher, picks: [], phaseBans: [],
         history: { map1Bans: [], map2Bans: [], map3Bans: [] },
         coin: { winner: null, loser: null, time: 0 }
     };
-    save(); renderMatches(); renderAllMatchesPublic(); renderLiveDraft();
+    save(); 
 }
 
 window.abortDraft = function(mi) {
     if(!confirm("Отменить текущий драфт?")) return;
     STATE.tournament.playoffs[mi].draftState = null;
-    save(); renderMatches(); renderAllMatchesPublic(); renderLiveDraft();
+    save(); 
 }
 
 window.draftAction = function(mi, type, val) {
@@ -800,6 +806,12 @@ window.draftAction = function(mi, type, val) {
     if (!d || !d.active) return;
     
     if (type === 'map') {
+        if (!d.history.map1Bans) d.history.map1Bans = [];
+        if (!d.history.map2Bans) d.history.map2Bans = [];
+        if (!d.history.map3Bans) d.history.map3Bans = [];
+        if (!d.phaseBans) d.phaseBans = [];
+        if (!d.picks) d.picks = [];
+
         if ([0, 1, 4, 5, 9].includes(d.step)) {
             if (d.step === 0) d.history.map1Bans.push({team: d.tLower, map: val});
             if (d.step === 1) d.history.map1Bans.push({team: d.tHigher, map: val});
@@ -825,7 +837,7 @@ window.draftAction = function(mi, type, val) {
         d.step++;
     }
     
-    save(); renderMatches(); renderAllMatchesPublic(); renderLiveDraft();
+    save(); 
 }
 
 function finishDraft(mi) {
@@ -833,11 +845,11 @@ function finishDraft(mi) {
     m.maps = m.draftState.picks.map((p, i) => {
          let bans = i === 0 ? m.draftState.history.map1Bans :
                     i === 1 ? m.draftState.history.map2Bans : m.draftState.history.map3Bans;
-         return { name: p.name, draft: { atk: p.atk, picker: p.picker, bans: bans }, rounds: [] };
+         return { name: p.name, draft: { atk: p.atk, picker: p.picker, bans: bans || [] }, rounds: [] };
     });
     m.draftState.active = false;
     m.draftState = null;
-    save(); renderMatches(); renderAllMatchesPublic(); renderLiveDraft();
+    save(); 
 }
 
 function renderLiveDraft() {
@@ -860,6 +872,9 @@ function renderLiveDraft() {
     
     let m = t.playoffs[activeMatchIdx];
     let d = m.draftState;
+    if (!d.picks) d.picks = [];
+    if (!d.phaseBans) d.phaseBans = [];
+
     let tL = t.teams.find(x => x.id === d.tLower) || {name:'?'};
     let tH = t.teams.find(x => x.id === d.tHigher) || {name:'?'};
     
@@ -948,9 +963,6 @@ function renderLiveDraft() {
     else if(admCont) admCont.innerHTML = '';
 }
 
-// ───────────────────────────────────────────────
-// MATCH INTERACTION & HELPERS
-// ───────────────────────────────────────────────
 function getMapIconsHtml(m, targetTeamId, tournamentTeams, align = 'center') {
     if (!m.maps) return '';
     let mapsWon = m.maps.filter(map => {
@@ -980,18 +992,23 @@ function generateDetailsHtmlForHistory(m, c1, c2, tm1, tm2, isPlayoff, tType, tT
    if (tType === 'ascension') {
        if (!m.maps || m.maps.length === 0) return '';
        return `<div style="display:flex; flex-direction:column; gap:10px; margin-top:10px;">${m.maps.map((map, i) => {
-              let s1 = map.t1Scores.reduce((a,b)=>a+b,0); let s2 = map.t2Scores.reduce((a,b)=>a+b,0);
+              let s1 = map.t1Scores ? map.t1Scores.reduce((a,b)=>a+b,0) : 0; 
+              let s2 = map.t2Scores ? map.t2Scores.reduce((a,b)=>a+b,0) : 0;
               let wCol = s1 > s2 ? c1 : (s2 > s1 ? c2 : '#fff');
+              let gridHtml = '';
+              if(map.t1Scores) {
+                  gridHtml = `<div style="display:grid; grid-template-columns:repeat(6, 1fr); gap:4px;">${map.t1Scores.map((score1, idx) => `<div style="text-align:center; background:rgba(255,255,255,0.05); padding:4px 0; border-radius:4px;"><div style="color:${c1}; font-size:0.6rem; font-weight:bold; margin-bottom:2px;">${score1}</div><div style="color:${c2}; font-size:0.6rem; font-weight:bold;">${map.t2Scores[idx]}</div></div>`).join('')}</div>`;
+              }
               return `<div style="background:rgba(0,0,0,0.3); padding:8px 12px; border-radius:6px; border-left:3px solid ${wCol};">
                  <div style="font-size:0.65rem; color:var(--text3); margin-bottom:6px; font-family:var(--font-mono); text-transform:uppercase;">Карта ${i+1} <span style="float:right; color:#fff; font-weight:bold;">${s1} : ${s2}</span></div>
-                 <div style="display:grid; grid-template-columns:repeat(6, 1fr); gap:4px;">${map.t1Scores.map((score1, idx) => `<div style="text-align:center; background:rgba(255,255,255,0.05); padding:4px 0; border-radius:4px;"><div style="color:${c1}; font-size:0.6rem; font-weight:bold; margin-bottom:2px;">${score1}</div><div style="color:${c2}; font-size:0.6rem; font-weight:bold;">${map.t2Scores[idx]}</div></div>`).join('')}</div>
+                 ${gridHtml}
               </div>`;
        }).join('')}</div>`;
    } else {
        if (isPlayoff) {
           if (!m.maps || m.maps.length === 0) return '';
           return `<div style="display:flex; flex-direction:column; gap:10px; margin-top:10px;">${m.maps.map((map, i) => {
-               let s1 = 0, s2 = 0; map.rounds.forEach(r => { if(r===1) s1++; else s2++; });
+               let s1 = 0, s2 = 0; if(map.rounds) map.rounds.forEach(r => { if(r===1) s1++; else s2++; });
                let wCol = s1 > s2 ? c1 : (s2 > s1 ? c2 : '#fff');
                
                let pTeam = map.draft && map.draft.picker !== undefined ? tTeams.find(x=>x.id===map.draft.picker)?.name : 'TBD';
@@ -1004,15 +1021,17 @@ function generateDetailsHtmlForHistory(m, c1, c2, tm1, tm2, isPlayoff, tType, tT
                }
 
                let roundsHtml = '';
-               map.rounds.forEach((r, idx) => {
-                   let rNum = idx + 1;
-                   if (rNum === 1) roundsHtml += `<div style="width:100%; font-size:0.55rem; color:var(--text3); margin:6px 0 2px;">РАУНДЫ 1-9</div>`;
-                   if (rNum === 10) roundsHtml += `<div style="width:100%; font-size:0.55rem; color:var(--cyan); margin:6px 0 2px;">🔄 СМЕНА СТОРОН (10-18)</div>`;
-                   if (rNum === 19) roundsHtml += `<div style="width:100%; font-size:0.55rem; color:var(--orange); margin:6px 0 2px;">⚔️ ОВЕРТАЙМ (19-21)</div>`;
-                   if (rNum === 22) roundsHtml += `<div style="width:100%; font-size:0.55rem; color:var(--cyan); margin:6px 0 2px;">🔄 СМЕНА СТОРОН (22-24)</div>`;
-                   if (rNum === 25) roundsHtml += `<div style="width:100%; font-size:0.55rem; color:var(--red); margin:6px 0 2px;">🔥 ВНЕЗАПНАЯ СМЕРТЬ (ДО 14)</div>`;
-                   roundsHtml += `<div class="ro-box" style="background:${r===1?c1:c2};" title="${r===1?tm1.name:tm2.name}">${rNum}</div>`;
-               });
+               if(map.rounds) {
+                   map.rounds.forEach((r, idx) => {
+                       let rNum = idx + 1;
+                       if (rNum === 1) roundsHtml += `<div style="width:100%; font-size:0.55rem; color:var(--text3); margin:6px 0 2px;">РАУНДЫ 1-9</div>`;
+                       if (rNum === 10) roundsHtml += `<div style="width:100%; font-size:0.55rem; color:var(--cyan); margin:6px 0 2px;">🔄 СМЕНА СТОРОН (10-18)</div>`;
+                       if (rNum === 19) roundsHtml += `<div style="width:100%; font-size:0.55rem; color:var(--orange); margin:6px 0 2px;">⚔️ ОВЕРТАЙМ (19-21)</div>`;
+                       if (rNum === 22) roundsHtml += `<div style="width:100%; font-size:0.55rem; color:var(--cyan); margin:6px 0 2px;">🔄 СМЕНА СТОРОН (22-24)</div>`;
+                       if (rNum === 25) roundsHtml += `<div style="width:100%; font-size:0.55rem; color:var(--red); margin:6px 0 2px;">🔥 ВНЕЗАПНАЯ СМЕРТЬ (ДО 14)</div>`;
+                       roundsHtml += `<div class="ro-box" style="background:${r===1?c1:c2};" title="${r===1?tm1.name:tm2.name}">${rNum}</div>`;
+                   });
+               }
 
                return `<div style="background:rgba(0,0,0,0.3); padding:10px 12px; border-radius:6px; border-left:3px solid ${wCol};">
                  <div style="font-size:0.7rem; color:var(--text); margin-bottom:2px; font-family:var(--font-mono); text-transform:uppercase; border-bottom:1px solid rgba(255,255,255,0.05); padding-bottom:6px;">Карта ${i+1} <span style="float:right; font-size:0.9rem; color:#fff; font-weight:bold;">${s1} : ${s2}</span></div>
@@ -1022,7 +1041,7 @@ function generateDetailsHtmlForHistory(m, c1, c2, tm1, tm2, isPlayoff, tType, tT
                </div>`;
           }).join('')}</div>`;
        } else {
-          if (m.rounds.length === 0) return '';
+          if (!m.rounds || m.rounds.length === 0) return '';
           return `<div class="ro-list">${m.rounds.map((r, i) => `<div class="ro-box" style="background:${r===1?c1:c2};" title="${r===1?tm1.name:tm2.name}">${i+1}</div>`).join('')}</div>`;
        }
    }
@@ -1036,7 +1055,6 @@ window.addRound = function(mi, winnerSide, isPlayoff = false) {
 
   if (isPlayoff && STATE.tournament.type === 'siege') {
       if (!m.maps || m.maps.length === 0) return;
-      
       let s1_maps = 0, s2_maps = 0;
       let activeMap = null;
       for (let map of m.maps) {
@@ -1045,14 +1063,14 @@ window.addRound = function(mi, winnerSide, isPlayoff = false) {
           else if (!activeMap && s1_maps < 2 && s2_maps < 2) { activeMap = map; }
       }
       if (!activeMap) return;
+      if (!activeMap.rounds) activeMap.rounds = [];
       activeMap.rounds.push(winnerSide);
   } else {
+      if (!m.rounds) m.rounds = [];
       m.rounds.push(winnerSide);
   }
 
-  checkPlayoffs(); recalcStandings();
-  triggerNotification(m, isPlayoff, isPlayoff ? m.name : `Матч ${mi+1} завершён`, isPlayoff && mi === 2);
-  save(); renderMatches(); renderAllMatchesPublic();
+  checkPlayoffs(); recalcStandings(); triggerNotification(m, isPlayoff, isPlayoff ? m.name : `Матч ${mi+1} завершён`, isPlayoff && mi === 2); save(); 
 };
 
 window.undoRound = function(mi, isPlayoff = false) {
@@ -1063,11 +1081,11 @@ window.undoRound = function(mi, isPlayoff = false) {
       if (!m.maps || m.maps.length === 0) return;
       let lastMap = null;
       for (let i = m.maps.length - 1; i >= 0; i--) {
-          if (m.maps[i].rounds.length > 0) { lastMap = m.maps[i]; break; }
+          if (m.maps[i].rounds && m.maps[i].rounds.length > 0) { lastMap = m.maps[i]; break; }
       }
       if (lastMap) lastMap.rounds.pop();
   } else {
-      if (m.rounds.length === 0) return;
+      if (!m.rounds || m.rounds.length === 0) return;
       m.rounds.pop(); 
   }
   m.notified = false;
@@ -1077,7 +1095,7 @@ window.undoRound = function(mi, isPlayoff = false) {
     if (mi === 0) { t.playoffs[1].t1 = null; t.playoffs[1].rounds = []; t.playoffs[1].notified = false; t.playoffs[2].t1 = null; t.playoffs[2].rounds = []; t.playoffs[2].notified = false; }
     else if (mi === 1) { t.playoffs[2].t1 = null; t.playoffs[2].rounds = []; t.playoffs[2].notified = false; }
   }
-  checkPlayoffs(); recalcStandings(); save(); renderMatches(); renderAllMatchesPublic();
+  checkPlayoffs(); recalcStandings(); save(); 
 };
 
 window.addAscensionTour = function(mi, isPlayoff) {
@@ -1095,14 +1113,14 @@ window.addAscensionTour = function(mi, isPlayoff) {
   if (checkMatchDone(m, isPlayoff)) return;
 
   if (!m.maps) m.maps = [];
-  if (m.maps.length === 0 || m.maps[m.maps.length - 1].t1Scores.length === 6) { m.maps.push({ t1Scores: [], t2Scores: [] }); }
+  if (m.maps.length === 0 || (m.maps[m.maps.length - 1].t1Scores && m.maps[m.maps.length - 1].t1Scores.length === 6)) { m.maps.push({ t1Scores: [], t2Scores: [] }); }
   
   const currentMap = m.maps[m.maps.length - 1];
+  if (!currentMap.t1Scores) currentMap.t1Scores = [];
+  if (!currentMap.t2Scores) currentMap.t2Scores = [];
   currentMap.t1Scores.push(val1); currentMap.t2Scores.push(val2);
 
-  checkPlayoffs(); recalcStandings();
-  triggerNotification(m, isPlayoff, isPlayoff ? m.name : `Матч ${mi+1} завершён`, isPlayoff && mi === 2);
-  save(); renderMatches(); renderAllMatchesPublic();
+  checkPlayoffs(); recalcStandings(); triggerNotification(m, isPlayoff, isPlayoff ? m.name : `Матч ${mi+1} завершён`, isPlayoff && mi === 2); save(); 
 };
 
 window.undoAscensionTour = function(mi, isPlayoff) {
@@ -1111,7 +1129,7 @@ window.undoAscensionTour = function(mi, isPlayoff) {
   if (!m.maps || m.maps.length === 0) return;
 
   const currentMap = m.maps[m.maps.length - 1];
-  if (currentMap.t1Scores.length > 0) {
+  if (currentMap.t1Scores && currentMap.t1Scores.length > 0) {
       currentMap.t1Scores.pop(); currentMap.t2Scores.pop();
       if (currentMap.t1Scores.length === 0) m.maps.pop();
   }
@@ -1122,7 +1140,7 @@ window.undoAscensionTour = function(mi, isPlayoff) {
     if (mi === 0) { t.playoffs[1].t1 = null; t.playoffs[1].maps = []; t.playoffs[1].notified = false; t.playoffs[2].t1 = null; t.playoffs[2].maps = []; t.playoffs[2].notified = false; }
     else if (mi === 1) { t.playoffs[2].t1 = null; t.playoffs[2].maps = []; t.playoffs[2].notified = false; }
   }
-  checkPlayoffs(); recalcStandings(); save(); renderMatches(); renderAllMatchesPublic();
+  checkPlayoffs(); recalcStandings(); save(); 
 };
 
 window.replayMatch = function(mi, isPlayoff = false) {
@@ -1136,7 +1154,7 @@ window.replayMatch = function(mi, isPlayoff = false) {
     if (mi === 0) { t.playoffs[1].t1 = null; t.playoffs[1].rounds = []; t.playoffs[1].maps = []; t.playoffs[1].notified = false; t.playoffs[2].t1 = null; t.playoffs[2].rounds = []; t.playoffs[2].maps = []; t.playoffs[2].notified = false; }
     else if (mi === 1) { t.playoffs[2].t1 = null; t.playoffs[2].rounds = []; t.playoffs[2].maps = []; t.playoffs[2].notified = false; }
   }
-  checkPlayoffs(); recalcStandings(); save(); renderMatches(); renderAllMatchesPublic(); renderLiveDraft();
+  checkPlayoffs(); recalcStandings(); save(); 
 };
 
 window.resetTournament = function() {
@@ -1144,12 +1162,12 @@ window.resetTournament = function() {
   
   if (STATE.tournament) { 
       STATE.tournament.teams.forEach(tm => {
-          tm.players = STATE.requests.filter(r => r.status === 'accepted' && r.teamId === tm.id).map(r => r.nickname);
+          tm.players = (STATE.requests||[]).filter(r => r.status === 'accepted' && r.teamId === tm.id).map(r => r.nickname);
       });
+      STATE.history = STATE.history || [];
       STATE.history.unshift({ id: Date.now(), date: new Date().toLocaleString('ru-RU'), type: STATE.tournament.type, teams: STATE.tournament.teams, standings: STATE.tournament.standings, matches: STATE.tournament.matches, playoffs: STATE.tournament.playoffs, prize: STATE.tournament.prize, aborted: true }); 
   }
   STATE.tournament = null; STATE.requests = []; save();
-  checkTournamentInit(); renderMatches(); renderStandings(); renderPublicStandings(); renderAllMatchesPublic(); renderRequests(); renderHistory(); renderLiveDraft();
   toast('Турнир досрочно отменён', true);
 };
 
@@ -1158,7 +1176,7 @@ window.finishTournament = function() {
   
   if (STATE.tournament) {
       STATE.tournament.teams.forEach(tm => {
-          tm.players = STATE.requests.filter(r => r.status === 'accepted' && r.teamId === tm.id).map(r => r.nickname);
+          tm.players = (STATE.requests||[]).filter(r => r.status === 'accepted' && r.teamId === tm.id).map(r => r.nickname);
       });
   }
 
@@ -1188,9 +1206,11 @@ window.finishTournament = function() {
      }
   }
 
-  if (STATE.tournament) { STATE.history.unshift({ id: Date.now(), date: new Date().toLocaleString('ru-RU'), type: STATE.tournament.type, teams: STATE.tournament.teams, standings: STATE.tournament.standings, matches: STATE.tournament.matches, playoffs: STATE.tournament.playoffs, prize: STATE.tournament.prize, aborted: false, winnerHtml: finalWinnerHtml }); }
+  if (STATE.tournament) { 
+      STATE.history = STATE.history || [];
+      STATE.history.unshift({ id: Date.now(), date: new Date().toLocaleString('ru-RU'), type: STATE.tournament.type, teams: STATE.tournament.teams, standings: STATE.tournament.standings, matches: STATE.tournament.matches, playoffs: STATE.tournament.playoffs, prize: STATE.tournament.prize, aborted: false, winnerHtml: finalWinnerHtml }); 
+  }
   STATE.tournament = null; STATE.requests = []; save();
-  checkTournamentInit(); renderMatches(); renderStandings(); renderPublicStandings(); renderAllMatchesPublic(); renderRequests(); renderHistory(); renderLiveDraft();
   toast('Турнир успешно завершён!', false);
 };
 
@@ -1248,8 +1268,8 @@ function buildMatchCard(m, mi, isPlayoff = false) {
                 }
              });
              if (activeMap) {
-                 played = activeMap.rounds.length;
-                 activeMap.rounds.forEach(x => { if(x===1) currentS1++; else currentS2++; });
+                 played = activeMap.rounds ? activeMap.rounds.length : 0;
+                 if(activeMap.rounds) activeMap.rounds.forEach(x => { if(x===1) currentS1++; else currentS2++; });
              }
           }
           
@@ -1330,8 +1350,8 @@ function buildMatchCard(m, mi, isPlayoff = false) {
   if (STATE.adminLogged && !done && m.t1 !== null && m.t2 !== null && t.type === 'ascension') {
       let activeMapIdx = m.maps && m.maps.length > 0 ? m.maps.length - 1 : 0;
       let nextTour = 1;
-      if (m.maps && m.maps[activeMapIdx] && m.maps[activeMapIdx].t1Scores.length < 6) { nextTour = m.maps[activeMapIdx].t1Scores.length + 1; } 
-      else if (m.maps && m.maps[activeMapIdx] && m.maps[activeMapIdx].t1Scores.length === 6) { activeMapIdx++; nextTour = 1; }
+      if (m.maps && m.maps[activeMapIdx] && m.maps[activeMapIdx].t1Scores && m.maps[activeMapIdx].t1Scores.length < 6) { nextTour = m.maps[activeMapIdx].t1Scores.length + 1; } 
+      else if (m.maps && m.maps[activeMapIdx] && m.maps[activeMapIdx].t1Scores && m.maps[activeMapIdx].t1Scores.length === 6) { activeMapIdx++; nextTour = 1; }
       
       let cLeft = TEAM_COLOR_VALS[tm1.id], cRight = TEAM_COLOR_VALS[tm2.id];
       controls += `
@@ -1380,13 +1400,12 @@ function renderMatches() {
   if (!t) { container.innerHTML = ''; if (bannerContainer) bannerContainer.innerHTML = ''; return; }
 
   let html = `<div class="section-label">// Групповой этап</div>`;
-  html += t.matches.map((m, mi) => buildMatchCard(m, mi, false)).join('');
+  if(t.matches) html += t.matches.map((m, mi) => buildMatchCard(m, mi, false)).join('');
 
   if (t.playoffs) {
     html += `<div class="section-label" style="margin-top:2rem;">// ПЛЕЙ-ОФФ (${t.type === 'ascension' ? 'ВОСХОЖДЕНИЕ' : 'СЕТКА BO3'})</div>`;
     html += t.playoffs.map((m, mi) => buildMatchCard(m, mi, true)).join('');
     
-    // БОЛЬШАЯ ФИНАЛЬНАЯ ПАНЕЛЬ ДЛЯ АДМИНА
     const finalMatch = t.playoffs[2];
     if (checkMatchDone(finalMatch, true) && STATE.adminLogged) {
         let fRes = checkMatchDone(finalMatch, true);
@@ -1462,7 +1481,7 @@ function renderPublicStandings() {
 
   if (teamDisplay) {
     teamDisplay.innerHTML = t.teams.map((tm) => {
-      const players = STATE.requests.filter(r => r.status === 'accepted' && r.teamId === tm.id);
+      const players = (STATE.requests||[]).filter(r => r.status === 'accepted' && r.teamId === tm.id);
       const playersStr = players.length > 0 ? players.map(p=>escHtml(p.nickname)).join(', ') : 'Нет игроков';
       return `<div class="team-color-card"><div class="team-avatar ${TEAM_BGS[tm.id]}" style="color:${TEAM_COLOR_VALS[tm.id]}">${tm.name.slice(0,2).toUpperCase()}</div><div class="team-card-name" style="color:${TEAM_COLOR_VALS[tm.id]}">${tm.name}</div><div class="team-players">${playersStr}</div><div style="font-family:var(--font-mono);font-size:0.65rem;color:var(--text3);margin-top:4px;">Матчей: ${tm.mp}</div></div>`;
     }).join('');
@@ -1480,7 +1499,6 @@ function renderPublicStandings() {
     }).join('');
   }
   
-  // БОЛЬШАЯ ФИНАЛЬНАЯ ПАНЕЛЬ ДЛЯ ЗРИТЕЛЕЙ
   if (t.playoffs && bannerContainer) {
       const finalMatch = t.playoffs[2];
       if (checkMatchDone(finalMatch, true)) {
@@ -1532,36 +1550,38 @@ function renderAllMatchesPublic() {
   const openDetails = new Set();
   if (container) { container.querySelectorAll('.round-order-details[open]').forEach(d => { if (d.dataset.mid) openDetails.add(d.dataset.mid); }); }
 
-  container.innerHTML = t.matches.map((m, mi) => {
-    const tm1 = t.teams[m.t1]; const tm2 = t.teams[m.t2];
-    const res = checkMatchDone(m, false);
-    
-    let s1_disp = 0, s2_disp = 0;
-    if (t.type === 'ascension') {
-        const ph = getMatchPhaseAscension(m);
-        s1_disp = ph.rating1; s2_disp = ph.rating2;
-    } else {
-        const ph = getMatchPhase(m);
-        s1_disp = ph.s1; s2_disp = ph.s2;
-    }
+  if(t.matches) {
+    container.innerHTML = t.matches.map((m, mi) => {
+      const tm1 = t.teams[m.t1]; const tm2 = t.teams[m.t2];
+      const res = checkMatchDone(m, false);
+      
+      let s1_disp = 0, s2_disp = 0;
+      if (t.type === 'ascension') {
+          const ph = getMatchPhaseAscension(m);
+          s1_disp = ph.rating1; s2_disp = ph.rating2;
+      } else {
+          const ph = getMatchPhase(m);
+          s1_disp = ph.s1; s2_disp = ph.s2;
+      }
 
-    let resultLabel = res ? (res.draw ? 'Ничья' : `Победа ${res.winner===1?tm1.name:tm2.name}`) : (s1_disp>0||s2_disp>0 ? 'В игре' : 'Ожидание');
-    const c1 = TEAM_COLOR_VALS[m.t1]; const c2 = TEAM_COLOR_VALS[m.t2];
-    const isOpen = openDetails.has(`m${mi}`) ? 'open' : '';
-    
-    let detailsHtml = generateDetailsHtml(m, c1, c2, tm1, tm2, false);
+      let resultLabel = res ? (res.draw ? 'Ничья' : `Победа ${res.winner===1?tm1.name:tm2.name}`) : (s1_disp>0||s2_disp>0 ? 'В игре' : 'Ожидание');
+      const c1 = TEAM_COLOR_VALS[m.t1]; const c2 = TEAM_COLOR_VALS[m.t2];
+      const isOpen = openDetails.has(`m${mi}`) ? 'open' : '';
+      
+      let detailsHtml = generateDetailsHtml(m, c1, c2, tm1, tm2, false);
 
-    return `
-      <div class="match-wrap">
-        <div class="mini-match">
-          <div class="mini-team" style="color:${c1}">${tm1.name}</div>
-          <div class="mini-score">${s1_disp} : ${s2_disp}</div>
-          <div class="mini-team right" style="color:${c2}">${tm2.name}</div>
-          <div class="mini-result">${resultLabel}</div>
-        </div>
-        ${detailsHtml !== '' ? `<details class="round-order-details" ${isOpen} data-mid="m${mi}"><summary>▼ ${t.type === 'ascension' ? 'Детали карт' : 'Порядок раундов'}</summary>${detailsHtml}</details>` : ''}
-      </div>`;
-  }).join('');
+      return `
+        <div class="match-wrap">
+          <div class="mini-match">
+            <div class="mini-team" style="color:${c1}">${tm1.name}</div>
+            <div class="mini-score">${s1_disp} : ${s2_disp}</div>
+            <div class="mini-team right" style="color:${c2}">${tm2.name}</div>
+            <div class="mini-result">${resultLabel}</div>
+          </div>
+          ${detailsHtml !== '' ? `<details class="round-order-details" ${isOpen} data-mid="m${mi}"><summary>▼ ${t.type === 'ascension' ? 'Детали карт' : 'Порядок раундов'}</summary>${detailsHtml}</details>` : ''}
+        </div>`;
+    }).join('');
+  }
   
   if (t.playoffs && bracketCont && bracketDisp) {
     bracketCont.style.display = 'block';
@@ -1590,8 +1610,8 @@ function renderAllMatchesPublic() {
                   else if (!activeMap && s1_disp < 2 && s2_disp < 2) { activeMap = map; }
                });
                if (activeMap) {
-                   played = activeMap.rounds.length;
-                   activeMap.rounds.forEach(r => { if(r===1) currentS1++; else currentS2++; });
+                   played = activeMap.rounds ? activeMap.rounds.length : 0;
+                   if(activeMap.rounds) activeMap.rounds.forEach(r => { if(r===1) currentS1++; else currentS2++; });
                }
            }
        }
@@ -1601,7 +1621,6 @@ function renderAllMatchesPublic() {
        
        let isSwapAnim = t.type === 'siege' && activeMap && (played === 9 || played === 21);
        
-       // СЧЕТ В СЕТКЕ ПЛЕЙ-ОФФ: всегда показываем карты, если матч завершен, или раунды если идет активная игра
        let matchIsDone = checkMatchDone(m, true);
        let leftScoreDisp = 0, rightScoreDisp = 0, topScoreHtml = '';
        let mapIconsLeft = '', mapIconsRight = '';
@@ -1666,10 +1685,10 @@ function renderHistory() {
        if (h.aborted) winnerHtml = '<div style="margin-bottom:15px;"><span style="color:var(--red)">Турнир отменён досрочно</span></div>';
        else if (h.winnerHtml) winnerHtml = `<div style="margin-bottom:15px; padding:10px; background:rgba(0,0,0,0.2); border-radius:6px; border-left:3px solid var(--yellow);">${h.winnerHtml}</div>`;
 
-       const teamList = h.teams.map(t => {
+       const teamList = h.teams ? h.teams.map(t => {
            let pStr = (t.players && t.players.length > 0) ? t.players.join(', ') : 'Нет игроков';
            return `<div style="margin-top:6px;"><span style="color:${TEAM_COLOR_VALS[t.id] || 'var(--cyan)'}; font-weight:bold;">${t.name}</span>: <span style="color:var(--text);">${pStr}</span></div>`;
-       }).join('');
+       }).join('') : '';
        
        const prizeHtml = h.prize ? `<div style="font-family:var(--font-mono);font-size:0.75rem;color:var(--yellow);margin-bottom:8px;">🏆 Награда: ${escHtml(h.prize)}</div>` : '';
        const typeLabel = h.type === 'ascension' ? '⚔️ ВОСХОЖДЕНИЕ' : '🏯 ОСАДА';
@@ -1703,7 +1722,7 @@ function renderHistory() {
                let c1 = TEAM_COLOR_VALS[m.t1], c2 = TEAM_COLOR_VALS[m.t2];
                let s1 = 0, s2 = 0;
                if (h.type === 'ascension') {
-                   if(m.maps) m.maps.forEach(map => { s1 += map.t1Scores.reduce((a,b)=>a+b,0); s2 += map.t2Scores.reduce((a,b)=>a+b,0); });
+                   if(m.maps) m.maps.forEach(map => { s1 += map.t1Scores?map.t1Scores.reduce((a,b)=>a+b,0):0; s2 += map.t2Scores?map.t2Scores.reduce((a,b)=>a+b,0):0; });
                } else {
                    if(m.rounds) m.rounds.forEach(r => { if(r===1) s1++; else s2++; });
                }
@@ -1733,15 +1752,16 @@ function renderHistory() {
                
                if (h.type === 'ascension') {
                    if(m.maps) m.maps.forEach(map => {
-                       let ms1 = map.t1Scores.reduce((a,b)=>a+b,0), ms2 = map.t2Scores.reduce((a,b)=>a+b,0);
-                       if(map.t1Scores.length===6) { if(ms1>ms2) s1++; else if(ms2>ms1) s2++; }
+                       let ms1 = map.t1Scores?map.t1Scores.reduce((a,b)=>a+b,0):0, ms2 = map.t2Scores?map.t2Scores.reduce((a,b)=>a+b,0):0;
+                       if(map.t1Scores && map.t1Scores.length===6) { if(ms1>ms2) s1++; else if(ms2>ms1) s2++; }
                    });
                } else {
                    if (m.maps) m.maps.forEach(map => {
-                       let ms1=0, ms2=0; map.rounds.forEach(r=>{if(r===1) ms1++; else ms2++;});
+                       let ms1=0, ms2=0; if(map.rounds) map.rounds.forEach(r=>{if(r===1) ms1++; else ms2++;});
                        let rRes = null; 
-                       if (map.rounds.length <= 18) { if(ms1>=10) rRes=1; else if(ms2>=10) rRes=2; }
-                       else if (map.rounds.length <= 24) { if(ms1>=13 && ms1>ms2) rRes=1; else if(ms2>=13 && ms2>ms1) rRes=2; }
+                       let rLen = map.rounds ? map.rounds.length : 0;
+                       if (rLen <= 18) { if(ms1>=10) rRes=1; else if(ms2>=10) rRes=2; }
+                       else if (rLen <= 24) { if(ms1>=13 && ms1>ms2) rRes=1; else if(ms2>=13 && ms2>ms1) rRes=2; }
                        else { if(ms1>=14) rRes=1; else if(ms2>=14) rRes=2; }
                        if (rRes===1) s1++; else if(rRes===2) s2++;
                    });
@@ -1790,9 +1810,9 @@ window.deleteHistory = function(id) {
 function renderRequests() {
   const list = document.getElementById('requests-list');
   const badge = document.getElementById('req-badge');
-  badge.textContent = STATE.requests.length;
+  badge.textContent = STATE.requests ? STATE.requests.length : 0;
 
-  if (STATE.requests.length === 0) { list.innerHTML = '<div class="no-requests">Нет новых заявок</div>'; return; }
+  if (!STATE.requests || STATE.requests.length === 0) { list.innerHTML = '<div class="no-requests">Нет новых заявок</div>'; return; }
 
   const sortedReqs = [...STATE.requests].sort((a,b) => a.status === 'pending' ? -1 : 1);
   list.innerHTML = sortedReqs.map(r => {
@@ -1815,19 +1835,19 @@ function renderRequests() {
 window.resolveReq = function(id, status) {
   const r = STATE.requests.find(x => x.id === id);
   if (r) { r.status = status; if(status!=='accepted') r.teamId = null; }
-  save(); renderRequests(); toast(status === 'accepted' ? '✓ Заявка принята' : '✕ Заявка отклонена', status !== 'accepted');
+  save(); toast(status === 'accepted' ? '✓ Заявка принята' : '✕ Заявка отклонена', status !== 'accepted');
 };
 
 window.deleteReq = function(id) {
   if(!confirm('Точно удалить эту заявку?')) return;
   STATE.requests = STATE.requests.filter(x => x.id !== id);
-  save(); renderRequests(); renderPublicStandings(); toast('Заявка удалена', true);
+  save(); toast('Заявка удалена', true);
 }
 
 window.assignPlayer = function(id, teamId) {
   const r = STATE.requests.find(x => x.id === id);
   if (r) { r.teamId = teamId === "" ? null : parseInt(teamId); }
-  save(); renderPublicStandings(); toast('Игрок перенесён');
+  save(); toast('Игрок перенесён');
 };
 
 function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -1850,7 +1870,7 @@ document.querySelectorAll('.nav-links a').forEach(a => {
     
     if (page === 'standings') { renderPublicStandings(); renderAllMatchesPublic(); renderLiveDraft(); }
     if (page === 'history') { renderHistory(); }
-    if (page === 'admin' && STATE.adminLogged) { renderRequests(); renderMatches(); renderStandings(); renderLiveDraft(); }
+    if (page === 'admin' && STATE.adminLogged) { checkTournamentInit(); renderRequests(); renderMatches(); renderStandings(); renderLiveDraft(); }
   });
 });
 
@@ -1870,8 +1890,9 @@ document.getElementById('submit-request-btn').addEventListener('click', () => {
   const nick = document.getElementById('req-nickname').value.trim();
   if (!nick) { toast('Введите никнейм!', true); return; }
   const nickLower = nick.toLowerCase();
-  if (STATE.requests.some(r => r.nickname.toLowerCase() === nickLower)) { toast('Игрок с таким ником уже подал заявку!', true); return; }
+  if (STATE.requests && STATE.requests.some(r => r.nickname.toLowerCase() === nickLower)) { toast('Игрок с таким ником уже подал заявку!', true); return; }
   
+  if(!STATE.requests) STATE.requests = [];
   STATE.requests.push({ id: Date.now(), nickname: nick, type: document.getElementById('req-type').value, note: document.getElementById('req-note').value.trim(), status: 'pending', time: new Date().toLocaleString('ru-RU') });
   save();
   
@@ -1879,7 +1900,6 @@ document.getElementById('submit-request-btn').addEventListener('click', () => {
   document.querySelector('.modal-footer').style.display = 'none';
   document.getElementById('success-msg').classList.add('show');
   setTimeout(() => { document.getElementById('request-modal').classList.remove('open'); document.getElementById('req-nickname').value=''; document.getElementById('req-note').value=''; }, 2000);
-  if (STATE.adminLogged) renderRequests();
 });
 
 document.getElementById('admin-login-btn').addEventListener('click', () => {
@@ -1906,24 +1926,11 @@ document.getElementById('init-tournament-btn').addEventListener('click', () => {
   recalcStandings(); renderMatches(); renderRequests(); renderLiveDraft(); toast('Турнир создан!');
 });
 
-// Глобальные уведомления
-let lastNotifyTime = Date.now(); 
-setInterval(() => {
-  const notifStr = localStorage.getItem('bf_notify');
-  if (notifStr) {
-    const notif = JSON.parse(notifStr);
-    if (notif.time > lastNotifyTime && (Date.now() - notif.time < 10000)) {
-      lastNotifyTime = notif.time;
-      showGlobalNotification(notif.title, notif.text, notif.isPlayoff, notif.isFinal, notif.players);
-    }
-  }
-}, 1000);
-
 function showGlobalNotification(title, htmlContent, isPlayoff, isFinal, playersHtml) {
   let el = document.getElementById('global-notify-box');
   if (!el) { el = document.createElement('div'); el.id = 'global-notify-box'; document.body.appendChild(el); }
   el.className = 'global-notify';
-  if (isFinal) el.classList.add('final-win');
+  if (isFinal) el.classList.add('final-win'); else el.classList.remove('final-win');
   let content = `<div class="gn-title">${title}</div><div class="gn-text">${htmlContent}</div>`;
   if(playersHtml) content += `<div class="gn-players">${playersHtml}</div>`;
   el.innerHTML = content;
@@ -1934,35 +1941,45 @@ function showGlobalNotification(title, htmlContent, isPlayoff, isFinal, playersH
   setTimeout(() => el.classList.remove('show'), isFinal ? 10000 : 6000);
 }
 
-// REAL-TIME SYNC
-let lastPollData = { t: localStorage.getItem('bf_tournament'), r: localStorage.getItem('bf_requests'), h: localStorage.getItem('bf_history') };
-setInterval(() => {
-  const newT = localStorage.getItem('bf_tournament'); const newR = localStorage.getItem('bf_requests'); const newH = localStorage.getItem('bf_history');
-  let changedT = newT !== lastPollData.t, changedR = newR !== lastPollData.r, changedH = newH !== lastPollData.h;
+// ==========================================
+// СИНХРОНИЗАЦИЯ FIREBASE В РЕАЛЬНОМ ВРЕМЕНИ
+// ==========================================
+db.ref('blockfest_data').on('value', (snapshot) => {
+  const data = snapshot.val();
+  if (data) {
+    STATE.requests = data.requests || [];
+    STATE.tournament = data.tournament || null;
+    STATE.history = data.history || [];
 
-  if (changedT || changedR || changedH) {
-     if (changedT) STATE.tournament = JSON.parse(newT || 'null');
-     if (changedR) STATE.requests = JSON.parse(newR || '[]');
-     if (changedH) STATE.history = JSON.parse(newH || '[]');
-
-     lastPollData = { t: newT, r: newR, h: newH };
-
-     if (changedT) {
-       if (document.getElementById('page-standings').classList.contains('active')) { renderPublicStandings(); renderAllMatchesPublic(); renderLiveDraft(); }
-       if (document.getElementById('page-admin').classList.contains('active') && STATE.adminLogged) { checkTournamentInit(); renderMatches(); renderStandings(); renderLiveDraft(); }
-     }
-     if (changedR) {
-       if (document.getElementById('page-admin').classList.contains('active') && STATE.adminLogged) { renderRequests(); }
-       if (document.getElementById('page-standings').classList.contains('active')) { renderPublicStandings(); }
-     }
-     if (changedH) {
-       if (document.getElementById('page-history').classList.contains('active')) { renderHistory(); }
-     }
+    // Обновляем UI после получения новых данных
+    recalcStandings();
+    
+    if (document.getElementById('page-standings').classList.contains('active')) { 
+        renderPublicStandings(); renderAllMatchesPublic(); renderLiveDraft(); 
+    }
+    if (document.getElementById('page-admin').classList.contains('active') && STATE.adminLogged) { 
+        checkTournamentInit(); renderMatches(); renderStandings(); renderLiveDraft(); renderRequests(); 
+    }
+    if (document.getElementById('page-history').classList.contains('active')) { 
+        renderHistory(); 
+    }
+  } else {
+    // Если база пустая (первый запуск)
+    STATE.requests = []; STATE.tournament = null; STATE.history = [];
+    checkTournamentInit();
   }
-}, 1000);
+});
 
-checkTournamentInit();
-if (STATE.tournament) { recalcStandings(); renderAllMatchesPublic(); checkPlayoffs(); renderLiveDraft(); }
+// Слушатель для глобальных уведомлений
+let lastNotifyTime = Date.now();
+db.ref('blockfest_notify').on('value', (snapshot) => {
+    const notif = snapshot.val();
+    if (notif && notif.time > lastNotifyTime && (Date.now() - notif.time < 10000)) {
+        lastNotifyTime = notif.time;
+        showGlobalNotification(notif.title, notif.text, notif.isPlayoff, notif.isFinal, notif.players);
+    }
+});
+
 </script>
 </body>
 </html>
